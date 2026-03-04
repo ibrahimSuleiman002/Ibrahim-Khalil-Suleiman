@@ -1,0 +1,8 @@
+{
+  "name": "Ziko - Premium Keke Hailing",
+  "description": "A luxury ride-hailing platform for Keke Napep in Kano State, featuring shared/private rides, guided bargaining, and advanced security.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
