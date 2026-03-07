@@ -1,7 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { User, Location, RideType, RideStatus } from '../types';
+import { User, Location, RideType, RideStatus, RideHistoryItem } from '../types';
 import { KANO_LANDMARKS } from '../constants';
+import RideHistory from './RideHistory';
 
 interface RiderAppProps {
   user: User;
@@ -14,20 +15,49 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
   const [destination, setDestination] = useState<string>('');
   const [rideType, setRideType] = useState<RideType>(RideType.SHARED);
   const [showSearch, setShowSearch] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [basePrice, setBasePrice] = useState(300);
   const [bargainPrice, setBargainPrice] = useState(300);
+  const [rideHistory, setRideHistory] = useState<RideHistoryItem[]>([]);
+
+  // Simulation: Load history from local storage
+  useEffect(() => {
+    const saved = localStorage.getItem(`ziko_history_${user.id}`);
+    if (saved) {
+      setRideHistory(JSON.parse(saved));
+    }
+  }, [user.id]);
 
   // Simulate Map Interactions
   const handleDestinationSelect = (place: string) => {
     setDestination(place);
     setShowSearch(false);
     setBasePrice(Math.floor(Math.random() * 500) + 200);
+    setBargainPrice(Math.floor(Math.random() * 500) + 200);
   };
 
   const handleRequestRide = () => {
     setStatus(RideStatus.SEARCHING);
     setTimeout(() => {
       setStatus(RideStatus.ACCEPTED);
+      // Automatically complete ride after 5 seconds for simulation
+      setTimeout(() => {
+        const newRide: RideHistoryItem = {
+          id: Math.random().toString(36).substr(2, 9),
+          date: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
+          price: rideType === RideType.SHARED ? basePrice : bargainPrice,
+          pickup,
+          destination,
+          partnerName: "Musa Dan Kano",
+          partnerAvatar: "https://picsum.photos/100/100?random=1",
+          status: RideStatus.COMPLETED
+        };
+        const updatedHistory = [newRide, ...rideHistory];
+        setRideHistory(updatedHistory);
+        localStorage.setItem(`ziko_history_${user.id}`, JSON.stringify(updatedHistory));
+        setStatus(RideStatus.IDLE);
+        setDestination('');
+      }, 5000);
     }, 3000);
   };
 
@@ -42,15 +72,15 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
               <div key={i} className="border-[0.5px] border-slate-400"></div>
             ))}
           </div>
-          
+
           {/* Landmark Pins */}
           {KANO_LANDMARKS.map((landmark, i) => (
-            <div 
-              key={i} 
+            <div
+              key={i}
               className="absolute group"
-              style={{ 
-                left: `${20 + (i * 12) % 60}%`, 
-                top: `${30 + (i * 8) % 50}%` 
+              style={{
+                left: `${20 + (i * 12) % 60}%`,
+                top: `${30 + (i * 8) % 50}%`
               }}
             >
               <div className="w-4 h-4 bg-emerald-600 rounded-full border-2 border-white animate-bounce-slow"></div>
@@ -72,12 +102,33 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
 
       {/* Header */}
       <div className="absolute top-4 left-4 right-4 flex justify-between items-center z-20 pointer-events-none">
-        <button 
-          onClick={() => onLogout()}
-          className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center luxury-shadow pointer-events-auto hover:bg-slate-50 transition-colors"
-        >
-          <span className="text-xl">☰</span>
-        </button>
+        <div className="flex items-center gap-3 pointer-events-auto">
+          <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center luxury-shadow overflow-hidden">
+            {user.avatar ? (
+              <img src={user.avatar} alt="Profile" className="w-full h-full object-cover" />
+            ) : (
+              <span className="text-xl">👤</span>
+            )}
+          </div>
+          <div className="bg-white px-4 py-2 rounded-2xl luxury-shadow flex flex-col justify-center">
+            <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider leading-none mb-1">Welcome, {user.name.split(' ')[0]}</p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => onLogout()}
+                className="text-[10px] font-black text-red-500 hover:text-red-600 transition-colors text-left uppercase tracking-tighter"
+              >
+                Sign Out
+              </button>
+              <span className="text-slate-200">|</span>
+              <button
+                onClick={() => setShowHistory(true)}
+                className="text-[10px] font-black text-[#065f46] hover:text-[#059669] transition-colors text-left uppercase tracking-tighter"
+              >
+                History
+              </button>
+            </div>
+          </div>
+        </div>
         <div className="px-4 py-2 bg-[#065f46] text-white rounded-full text-xs font-bold luxury-shadow pointer-events-auto">
           ZIKO KANO
         </div>
@@ -93,9 +144,9 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
               <div className="bg-slate-50 p-4 rounded-3xl space-y-3">
                 <div className="flex items-center gap-3">
                   <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
-                  <input 
-                    type="text" 
-                    value={pickup} 
+                  <input
+                    type="text"
+                    value={pickup}
                     readOnly
                     className="bg-transparent border-none w-full font-medium text-slate-800 focus:ring-0"
                   />
@@ -103,8 +154,8 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
                 <div className="border-t border-slate-200"></div>
                 <div className="flex items-center gap-3">
                   <div className="w-3 h-3 rounded-full bg-amber-500"></div>
-                  <input 
-                    type="text" 
+                  <input
+                    type="text"
                     placeholder="Where to in Kano?"
                     onFocus={() => setShowSearch(true)}
                     value={destination}
@@ -116,7 +167,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
 
               {destination && (
                 <div className="grid grid-cols-2 gap-4 animate-in slide-in-from-bottom-2 duration-300">
-                  <button 
+                  <button
                     onClick={() => setRideType(RideType.SHARED)}
                     className={`p-4 rounded-3xl border-2 transition-all ${rideType === RideType.SHARED ? 'border-[#065f46] bg-emerald-50' : 'border-slate-100 bg-white'}`}
                   >
@@ -125,7 +176,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
                     <p className="text-xs text-slate-500">3 Seats • Fixed</p>
                     <p className="mt-2 font-bold text-[#065f46]">₦{basePrice}</p>
                   </button>
-                  <button 
+                  <button
                     onClick={() => setRideType(RideType.PRIVATE)}
                     className={`p-4 rounded-3xl border-2 transition-all ${rideType === RideType.PRIVATE ? 'border-[#b45309] bg-amber-50' : 'border-slate-100 bg-white'}`}
                   >
@@ -148,7 +199,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
                 </div>
               )}
 
-              <button 
+              <button
                 disabled={!destination}
                 onClick={handleRequestRide}
                 className="w-full py-5 bg-[#065f46] text-white rounded-[24px] font-bold text-lg disabled:opacity-30 disabled:grayscale transition-all shadow-xl shadow-emerald-900/10"
@@ -180,10 +231,10 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
                 </div>
                 <button className="w-12 h-12 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center font-bold">SOS</button>
               </div>
-              
+
               <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-3xl">
                 <div className="w-14 h-14 bg-slate-200 rounded-2xl overflow-hidden">
-                   <img src="https://picsum.photos/100/100?random=1" alt="Driver" />
+                  <img src="https://picsum.photos/100/100?random=1" alt="Driver" />
                 </div>
                 <div className="flex-1">
                   <p className="font-bold text-slate-800">Musa Dan Kano</p>
@@ -193,17 +244,17 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                 <div className="p-4 bg-emerald-50 rounded-2xl">
-                    <p className="text-[10px] uppercase font-bold text-emerald-700 tracking-wider">Fare</p>
-                    <p className="text-lg font-bold text-emerald-900">₦{bargainPrice}</p>
-                 </div>
-                 <div className="p-4 bg-slate-50 rounded-2xl">
-                    <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Payment</p>
-                    <p className="text-lg font-bold text-slate-800">Cash</p>
-                 </div>
+                <div className="p-4 bg-emerald-50 rounded-2xl">
+                  <p className="text-[10px] uppercase font-bold text-emerald-700 tracking-wider">Fare</p>
+                  <p className="text-lg font-bold text-emerald-900">₦{rideType === RideType.SHARED ? basePrice : bargainPrice}</p>
+                </div>
+                <div className="p-4 bg-slate-50 rounded-2xl">
+                  <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Payment</p>
+                  <p className="text-lg font-bold text-slate-800">Cash</p>
+                </div>
               </div>
 
-              <button 
+              <button
                 onClick={() => setStatus(RideStatus.IDLE)}
                 className="w-full py-4 text-slate-400 font-medium text-sm"
               >
@@ -218,14 +269,14 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
       {showSearch && (
         <div className="absolute inset-0 bg-white z-50 p-6 flex flex-col animate-in fade-in duration-300">
           <div className="flex items-center gap-4 mb-8">
-            <button onClick={() => setShowSearch(false)} className="text-2xl">←</button>
+            <button onClick={() => setShowSearch(false)} className="text-2xl w-10 h-10 flex items-center justify-center bg-slate-50 rounded-full">←</button>
             <h2 className="text-xl font-bold">Where to?</h2>
           </div>
-          
+
           <div className="relative mb-8">
-            <input 
+            <input
               autoFocus
-              type="text" 
+              type="text"
               placeholder="Search major landmarks or roads..."
               className="w-full pl-12 pr-4 py-4 bg-slate-50 border-none rounded-2xl font-medium focus:ring-2 focus:ring-[#065f46]"
             />
@@ -234,7 +285,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
 
           <div className="space-y-2 overflow-y-auto">
             {KANO_LANDMARKS.map((landmark, i) => (
-              <button 
+              <button
                 key={i}
                 onClick={() => handleDestinationSelect(landmark.name)}
                 className="w-full p-4 flex items-center gap-4 hover:bg-slate-50 rounded-2xl transition-colors"
@@ -248,6 +299,15 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
             ))}
           </div>
         </div>
+      )}
+
+      {/* Ride History Overlay */}
+      {showHistory && (
+        <RideHistory
+          history={rideHistory}
+          onBack={() => setShowHistory(false)}
+          title="Ride History"
+        />
       )}
     </div>
   );

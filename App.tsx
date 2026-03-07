@@ -3,7 +3,6 @@ import React, { useState, useEffect } from 'react';
 import { UserRole, User } from './types';
 import RiderApp from './components/RiderApp';
 import DriverApp from './components/DriverApp';
-import AdminPanel from './components/AdminPanel';
 import Login from './components/Login';
 
 const App: React.FC = () => {
@@ -49,7 +48,6 @@ const App: React.FC = () => {
     <div className="h-screen w-screen bg-slate-50 overflow-hidden relative">
       {currentUser.role === UserRole.RIDER && <RiderApp user={currentUser} onLogout={handleLogout} />}
       {currentUser.role === UserRole.DRIVER && <DriverApp user={currentUser} onLogout={handleLogout} />}
-      {currentUser.role === UserRole.ADMIN && <AdminPanel user={currentUser} onLogout={handleLogout} />}
     </div>
   );
 };

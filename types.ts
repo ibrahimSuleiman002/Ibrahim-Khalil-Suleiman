@@ -33,6 +33,9 @@ export interface User {
   role: UserRole;
   avatar?: string;
   isVerified: boolean;
+  vehicleType?: string;
+  plateNumber?: string;
+  isDriverVerified?: boolean;
 }
 
 export interface Keke {
@@ -54,4 +57,15 @@ export interface RideRequest {
   seatsOccupied: number;
   status: RideStatus;
   createdAt: number;
+}
+
+export interface RideHistoryItem {
+  id: string;
+  date: string;
+  price: number;
+  pickup: string;
+  destination: string;
+  partnerName: string; // Driver name for Rider, Rider name for Driver
+  partnerAvatar?: string;
+  status: RideStatus.COMPLETED;
 }
