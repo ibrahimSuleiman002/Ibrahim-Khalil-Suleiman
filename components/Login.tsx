@@ -1,6 +1,13 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { UserRole, User } from '../types';
+import { auth } from '../firebaseConfig';
+import {
+  RecaptchaVerifier,
+  signInWithPhoneNumber,
+  ConfirmationResult,
+  onAuthStateChanged
+} from 'firebase/auth';
 
 interface LoginProps {
   onLogin: (user: User) => void;
@@ -10,6 +17,11 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [step, setStep] = useState<'role' | 'phone' | 'otp' | 'profile'>('role');
   const [role, setRole] = useState<UserRole | null>(null);
   const [phone, setPhone] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
+  const [confirmationResult, setConfirmationResult] = useState<ConfirmationResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isSending, setIsSending] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
 
   // Profile States
   const [name, setName] = useState('');
@@ -17,21 +29,80 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [vehicleType, setVehicleType] = useState('Standard Keke');
   const [plateNumber, setPlateNumber] = useState('');
 
+  const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
+
+  useEffect(() => {
+    // Check if user is already logged in (but might need profile setup)
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (user && user.phoneNumber && step === 'role') {
+        setPhone(user.phoneNumber.replace('+234', ''));
+        // If we have a user but no session in App.tsx, we still go through the flow
+        // or we could skip to profile if they are new.
+      }
+    });
+    return () => unsubscribe();
+  }, [step]);
+
+  const setupRecaptcha = () => {
+    if (!recaptchaRef.current) {
+      recaptchaRef.current = new RecaptchaVerifier(auth, 'recaptcha-container', {
+        'size': 'invisible',
+        'callback': () => {
+          // reCAPTCHA solved, allow signInWithPhoneNumber.
+        }
+      });
+    }
+  };
+
   const handleRoleSelect = (selectedRole: UserRole) => {
     setRole(selectedRole);
     setStep('phone');
   };
 
-  const handlePhoneSubmit = (e: React.FormEvent) => {
+  const handlePhoneSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (phone.length >= 10) setStep('otp');
+    if (phone.length < 10) return;
+
+    setError(null);
+    setIsSending(true);
+
+    try {
+      setupRecaptcha();
+      const appVerifier = recaptchaRef.current;
+      if (!appVerifier) throw new Error("Recaptcha not initialized");
+
+      const formattedPhone = `+234${phone.startsWith('0') ? phone.substring(1) : phone}`;
+      const confirmation = await signInWithPhoneNumber(auth, formattedPhone, appVerifier);
+      setConfirmationResult(confirmation);
+      setStep('otp');
+    } catch (err: any) {
+      console.error("Auth Error:", err);
+      setError(err.message || "Failed to send SMS. Please try again.");
+      if (recaptchaRef.current) {
+        recaptchaRef.current.clear();
+        recaptchaRef.current = null;
+      }
+    } finally {
+      setIsSending(false);
+    }
   };
 
-  const handleOtpSubmit = (e: React.FormEvent) => {
+  const handleOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!role) return;
+    if (!confirmationResult || verificationCode.length < 6) return;
 
-    setStep('profile');
+    setError(null);
+    setIsVerifying(true);
+
+    try {
+      await confirmationResult.confirm(verificationCode);
+      setStep('profile');
+    } catch (err: any) {
+      console.error("Verification Error:", err);
+      setError("Invalid code. Please try again.");
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
   const handleProfileSubmit = (e: React.FormEvent) => {
@@ -106,16 +177,24 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   className="w-full pl-16 pr-4 py-4 bg-slate-50 border-none rounded-2xl text-lg font-bold focus:ring-2 focus:ring-[#065f46]"
                 />
               </div>
+
+              {error && <p className="text-red-500 text-xs mt-4 font-bold">{error}</p>}
+              <div id="recaptcha-container"></div>
             </div>
 
             <button
               type="submit"
-              disabled={phone.length < 10}
-              className="w-full py-5 bg-[#065f46] text-white rounded-3xl font-bold shadow-lg shadow-emerald-900/20 disabled:opacity-50 transition-opacity"
+              disabled={phone.length < 10 || isSending}
+              className="w-full py-5 bg-[#065f46] text-white rounded-3xl font-bold shadow-lg shadow-emerald-900/20 disabled:opacity-50 transition-opacity flex items-center justify-center gap-2"
             >
-              Get Secure Code
+              {isSending ? (
+                <>
+                  <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                  Sending...
+                </>
+              ) : "Get Secure Code"}
             </button>
-            <button onClick={() => setStep('role')} className="w-full text-slate-400 font-medium text-sm">Go Back</button>
+            <button type="button" onClick={() => setStep('role')} className="w-full text-slate-400 font-medium text-sm">Go Back</button>
           </form>
         )}
 
@@ -123,28 +202,40 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           <form onSubmit={handleOtpSubmit} className="space-y-6 animate-in zoom-in-95 duration-300">
             <div className="bg-white p-8 rounded-[40px] luxury-shadow">
               <h2 className="text-2xl font-bold text-slate-800 mb-2">Verify ID</h2>
-              <p className="text-slate-500 mb-8 text-sm">We sent a code to +234 {phone}.</p>
+              <p className="text-slate-500 mb-8 text-sm">We sent a 6-digit code to +234 {phone}.</p>
 
-              <div className="flex gap-2 justify-center">
-                {[1, 2, 3, 4].map((i) => (
-                  <input
-                    key={i}
-                    type="text"
-                    maxLength={1}
-                    className="w-14 h-14 text-center text-2xl font-bold bg-slate-50 rounded-2xl focus:ring-2 focus:ring-[#065f46]"
-                    autoFocus={i === 1}
-                  />
-                ))}
+              <div className="flex justify-center">
+                <input
+                  autoFocus
+                  type="text"
+                  maxLength={6}
+                  value={verificationCode}
+                  onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, ''))}
+                  placeholder="000000"
+                  className="w-full text-center text-3xl tracking-[1rem] font-black bg-slate-50 py-4 rounded-2xl focus:ring-2 focus:ring-[#065f46] outline-none"
+                />
               </div>
+
+              {error && <p className="text-red-500 text-xs mt-4 font-bold text-center">{error}</p>}
             </div>
 
             <button
               type="submit"
-              className="w-full py-5 bg-[#065f46] text-white rounded-3xl font-bold shadow-lg shadow-emerald-900/20"
+              disabled={verificationCode.length < 6 || isVerifying}
+              className="w-full py-5 bg-[#065f46] text-white rounded-3xl font-bold shadow-lg shadow-emerald-900/20 disabled:opacity-50 flex items-center justify-center gap-2"
             >
-              Confirm Access
+              {isVerifying ? (
+                <>
+                  <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                  Verifying...
+                </>
+              ) : "Confirm Access"}
             </button>
-            <button onClick={() => setStep('phone')} className="w-full text-slate-400 font-medium text-sm">Change Number</button>
+            <button type="button" onClick={() => {
+              setStep('phone');
+              setVerificationCode('');
+              setError(null);
+            }} className="w-full text-slate-400 font-medium text-sm">Change Number</button>
           </form>
         )}
 
@@ -235,7 +326,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           </form>
         )}
       </div>
-    </div>
+    </div >
   );
 };
 

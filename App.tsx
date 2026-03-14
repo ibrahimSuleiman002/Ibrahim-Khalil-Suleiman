@@ -1,5 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
+import { auth } from './firebaseConfig';
+import { onAuthStateChanged } from 'firebase/auth';
 import { UserRole, User } from './types';
 import RiderApp from './components/RiderApp';
 import DriverApp from './components/DriverApp';
@@ -9,13 +11,27 @@ const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Simulation of auth persistence
+  // Sync with Firebase Auth
   useEffect(() => {
-    const saved = localStorage.getItem('ziko_user');
-    if (saved) {
-      setCurrentUser(JSON.parse(saved));
-    }
-    setTimeout(() => setIsLoading(false), 1500);
+    const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
+      if (fbUser) {
+        const saved = localStorage.getItem('ziko_user');
+        if (saved) {
+          const user = JSON.parse(saved);
+          // Ensure the phone number matches or update if necessary
+          setCurrentUser(user);
+        } else {
+          // If no local record exists but Firebase is logged in, 
+          // we might need to prompt for profile setup if the current UI doesn't handle it.
+          // For now, we'll let the Login component handle the profile setup on new logins.
+          setCurrentUser(null);
+        }
+      } else {
+        setCurrentUser(null);
+      }
+      setIsLoading(false);
+    });
+    return () => unsubscribe();
   }, []);
 
   const handleLogin = (user: User) => {
