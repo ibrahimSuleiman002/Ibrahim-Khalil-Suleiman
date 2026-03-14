@@ -6,6 +6,7 @@ import { UserRole, User } from './types';
 import RiderApp from './components/RiderApp';
 import DriverApp from './components/DriverApp';
 import Login from './components/Login';
+import { authApi } from './services/api';
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -13,26 +14,65 @@ const App: React.FC = () => {
 
   // Sync with Firebase Auth
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (fbUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
       if (fbUser) {
-        const saved = localStorage.getItem('ziko_user');
-        if (saved) {
-          const user = JSON.parse(saved);
-          // Ensure the phone number matches or update if necessary
+        const savedToken = localStorage.getItem('ziko_token');
+        const savedUser = localStorage.getItem('ziko_user');
+        
+        if (savedToken && savedUser) {
+          const user = JSON.parse(savedUser);
           setCurrentUser(user);
-        } else {
-          // If no local record exists but Firebase is logged in, 
-          // we might need to prompt for profile setup if the current UI doesn't handle it.
-          // For now, we'll let the Login component handle the profile setup on new logins.
-          setCurrentUser(null);
+          refreshUserData(user.role);
         }
       } else {
         setCurrentUser(null);
+        localStorage.removeItem('ziko_token');
+        localStorage.removeItem('ziko_user');
       }
       setIsLoading(false);
     });
     return () => unsubscribe();
   }, []);
+
+  // Periodic refresh for real-time status (like verification)
+  useEffect(() => {
+    let interval: any;
+    if (currentUser) {
+      interval = setInterval(() => {
+        refreshUserData(currentUser.role);
+      }, 15000); // Sync every 15 seconds
+    }
+    return () => clearInterval(interval);
+  }, [currentUser?.id]);
+
+  const refreshUserData = async (roleType: UserRole) => {
+    try {
+      const role = roleType === UserRole.RIDER ? 'rider' : 'pilot';
+      const response = await authApi.getMe(role);
+      const backendUser = response.data;
+      if (!backendUser) return;
+
+      const updatedUser: User = {
+        id: backendUser._id,
+        name: backendUser.fullName,
+        phone: backendUser.phone,
+        role: roleType,
+        avatar: backendUser.image,
+        isVerified: backendUser.verified,
+        vehicleType: backendUser.vehicleType,
+        plateNumber: backendUser.plateNumber,
+        isDriverVerified: backendUser.verified
+      };
+      
+      // Only update if something changed to prevent unnecessary re-renders
+      if (JSON.stringify(updatedUser) !== localStorage.getItem('ziko_user')) {
+        setCurrentUser(updatedUser);
+        localStorage.setItem('ziko_user', JSON.stringify(updatedUser));
+      }
+    } catch (err) {
+      console.error("Failed to refresh user data:", err);
+    }
+  };
 
   const handleLogin = (user: User) => {
     setCurrentUser(user);
@@ -42,6 +82,13 @@ const App: React.FC = () => {
   const handleLogout = () => {
     setCurrentUser(null);
     localStorage.removeItem('ziko_user');
+    localStorage.removeItem('ziko_token');
+    auth.signOut();
+  };
+
+  const handleUpdateUser = (user: User) => {
+    setCurrentUser(user);
+    localStorage.setItem('ziko_user', JSON.stringify(user));
   };
 
   if (isLoading) {
@@ -62,8 +109,12 @@ const App: React.FC = () => {
 
   return (
     <div className="h-screen w-screen bg-slate-50 overflow-hidden relative">
-      {currentUser.role === UserRole.RIDER && <RiderApp user={currentUser} onLogout={handleLogout} />}
-      {currentUser.role === UserRole.DRIVER && <DriverApp user={currentUser} onLogout={handleLogout} />}
+      {currentUser.role === UserRole.RIDER && (
+        <RiderApp user={currentUser} onLogout={handleLogout} onUpdateUser={handleUpdateUser} />
+      )}
+      {currentUser.role === UserRole.DRIVER && (
+        <DriverApp user={currentUser} onLogout={handleLogout} onUpdateUser={handleUpdateUser} />
+      )}
     </div>
   );
 };

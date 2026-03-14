@@ -8,6 +8,7 @@ import {
   ConfirmationResult,
   onAuthStateChanged
 } from 'firebase/auth';
+import { authApi, profileApi } from '../services/api';
 
 interface LoginProps {
   onLogin: (user: User) => void;
@@ -26,6 +27,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   // Profile States
   const [name, setName] = useState('');
   const [avatar, setAvatar] = useState('');
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [vehicleType, setVehicleType] = useState('Standard Keke');
   const [plateNumber, setPlateNumber] = useState('');
 
@@ -95,32 +97,99 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setIsVerifying(true);
 
     try {
-      await confirmationResult.confirm(verificationCode);
-      setStep('profile');
-    } catch (err: any) {
-      console.error("Verification Error:", err);
-      setError("Invalid code. Please try again.");
+      const result = await confirmationResult.confirm(verificationCode);
+      const idToken = await result.user.getIdToken();
+      const backendRole = role === UserRole.RIDER ? 'rider' : 'pilot';
+      
+      try {
+        const response = await authApi.firebaseLogin(idToken, phone, backendRole);
+        const { token, user: backendUser } = response.data;
+        
+        localStorage.setItem('ziko_token', token);
+        
+        if (backendUser.fullName) {
+          onLogin({
+            id: backendUser._id,
+            name: backendUser.fullName,
+            phone: backendUser.phone,
+            role: role!,
+            avatar: backendUser.image,
+            isVerified: backendUser.verified,
+            vehicleType: backendUser.vehicleType,
+            plateNumber: backendUser.plateNumber,
+            isDriverVerified: backendUser.verified
+          });
+        } else {
+          setStep('profile');
+        }
+      } catch (backendErr: any) {
+        console.error("Backend Auth Error:", backendErr);
+        const msg = backendErr.response?.data?.error;
+        setError(typeof msg === 'string' ? msg : "Backend authentication failed.");
+      }
+    } catch (firebaseErr: any) {
+      console.error("Firebase Verification Error:", firebaseErr);
+      setError("Invalid OTP code. Please check and try again.");
     } finally {
       setIsVerifying(false);
     }
   };
 
-  const handleProfileSubmit = (e: React.FormEvent) => {
+  const handleProfileSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!role) return;
 
-    const newUser: User = {
-      id: Math.random().toString(36).substr(2, 9),
-      name: name || "User",
-      phone,
-      role,
-      avatar: avatar || `https://picsum.photos/200/200?random=${Math.random()}`,
-      isVerified: true,
-      vehicleType: role === UserRole.DRIVER ? vehicleType : undefined,
-      plateNumber: role === UserRole.DRIVER ? plateNumber : undefined,
-      isDriverVerified: role === UserRole.DRIVER ? true : undefined
-    };
-    onLogin(newUser);
+    setError(null);
+    setIsVerifying(true);
+
+    try {
+      const formData = new FormData();
+      formData.append('fullName', name);
+      if (avatarFile) {
+        formData.append('image', avatarFile);
+      }
+      if (role === UserRole.DRIVER) {
+        formData.append('vehicleType', vehicleType);
+        formData.append('plateNumber', plateNumber);
+      }
+
+      const backendRole = role === UserRole.RIDER ? 'rider' : 'pilot';
+      const response = await profileApi.updateProfile(backendRole, formData);
+      const backendUser = response.data;
+
+      const newUser: User = {
+        id: backendUser._id,
+        name: backendUser.fullName,
+        phone: backendUser.phone,
+        role: role,
+        avatar: backendUser.image,
+        isVerified: backendUser.verified,
+        vehicleType: backendUser.vehicleType,
+        plateNumber: backendUser.plateNumber,
+        isDriverVerified: backendUser.verified
+      };
+      onLogin(newUser);
+    } catch (err: any) {
+      console.error("Profile Update Error Detailed:", err);
+      let errorMsg = "Failed to save profile. Please try again.";
+      
+      if (err.response?.data) {
+        const data = err.response.data;
+        if (typeof data.error === 'string') {
+          errorMsg = data.error;
+        } else if (typeof data === 'string') {
+          errorMsg = data;
+        } else {
+          errorMsg = JSON.stringify(data);
+        }
+      } else if (err.message) {
+        errorMsg = err.message;
+      }
+      
+      setError(errorMsg);
+    } finally {
+      setIsVerifying(false);
+    }
   };
 
   return (
@@ -178,7 +247,13 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 />
               </div>
 
-              {error && <p className="text-red-500 text-xs mt-4 font-bold">{error}</p>}
+              {error && (
+                <div className="bg-red-50 p-4 rounded-2xl border border-red-100 mb-6">
+                  <p className="text-red-500 text-xs font-bold text-center">
+                    {typeof error === 'string' ? error : JSON.stringify(error)}
+                  </p>
+                </div>
+              )}
               <div id="recaptcha-container"></div>
             </div>
 
@@ -216,7 +291,13 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 />
               </div>
 
-              {error && <p className="text-red-500 text-xs mt-4 font-bold text-center">{error}</p>}
+              {error && (
+                <div className="bg-red-50 p-4 rounded-2xl border border-red-100 mb-6">
+                  <p className="text-red-500 text-xs font-bold text-center">
+                    {typeof error === 'string' ? error : JSON.stringify(error)}
+                  </p>
+                </div>
+              )}
             </div>
 
             <button
@@ -240,7 +321,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         )}
 
         {step === 'profile' && (
-          <form onSubmit={handleProfileSubmit} className="space-y-6 animate-in zoom-in-95 duration-300 max-h-[85vh] overflow-y-auto pb-10 custom-scrollbar">
+          <form onSubmit={handleProfileSubmit} className="space-y-6 animate-in zoom-in-95 duration-300 max-h-[80vh] overflow-y-auto pb-20 px-1 custom-scrollbar">
             <div className="bg-white p-8 rounded-[40px] luxury-shadow space-y-6">
               <div>
                 <h2 className="text-2xl font-bold text-slate-800 mb-2">
@@ -260,9 +341,10 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                       type="file"
                       className="hidden"
                       onChange={(e) => {
-                        // Simulated file upload
                         if (e.target.files?.[0]) {
-                          setAvatar(URL.createObjectURL(e.target.files[0]));
+                          const file = e.target.files[0];
+                          setAvatarFile(file);
+                          setAvatar(URL.createObjectURL(file));
                         }
                       }}
                     />
@@ -308,10 +390,12 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                         className="w-full px-4 py-4 bg-slate-50 border-none rounded-2xl font-bold focus:ring-2 focus:ring-[#065f46]"
                       />
                     </div>
-                    <div className="p-4 bg-emerald-50 rounded-2xl flex items-center gap-3">
-                      <div className="w-6 h-6 bg-emerald-500 text-white rounded-full flex items-center justify-center text-[10px]">✓</div>
-                      <p className="text-xs font-bold text-emerald-800">IDENTITY VERIFICATION READY</p>
-                    </div>
+                    {role === UserRole.DRIVER && name && avatarFile && plateNumber && (
+                      <div className="p-4 bg-emerald-50 rounded-2xl flex items-center gap-3 animate-in fade-in zoom-in duration-300">
+                        <div className="w-6 h-6 bg-emerald-500 text-white rounded-full flex items-center justify-center text-[10px]">✓</div>
+                        <p className="text-xs font-bold text-emerald-800">IDENTITY VERIFICATION READY</p>
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -319,9 +403,15 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
             <button
               type="submit"
-              className="w-full py-5 bg-[#065f46] text-white rounded-3xl font-bold shadow-lg shadow-emerald-900/20"
+              disabled={isVerifying}
+              className="w-full py-5 bg-[#065f46] text-white rounded-3xl font-bold shadow-lg shadow-emerald-900/20 disabled:opacity-50 flex items-center justify-center gap-2"
             >
-              Complete Registration
+              {isVerifying ? (
+                <>
+                  <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                  Registering...
+                </>
+              ) : "Complete Registration"}
             </button>
           </form>
         )}

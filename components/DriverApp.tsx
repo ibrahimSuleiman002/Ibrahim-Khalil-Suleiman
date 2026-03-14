@@ -2,26 +2,69 @@
 import React, { useState, useEffect } from 'react';
 import { User, RideStatus, RideHistoryItem } from '../types';
 import RideHistory from './RideHistory';
+import { rideApi, profileApi } from '../services/api';
 
 interface DriverAppProps {
   user: User;
   onLogout: () => void;
+  onUpdateUser: (user: User) => void;
 }
 
-const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout }) => {
+const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser }) => {
   const [isOnline, setIsOnline] = useState(false);
   const [activeRide, setActiveRide] = useState<any>(null);
   const [showIncoming, setShowIncoming] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [rideHistory, setRideHistory] = useState<RideHistoryItem[]>([]);
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
 
-  // Simulation: Load history from local storage
+  // Fetch history from backend
   useEffect(() => {
-    const saved = localStorage.getItem(`ziko_history_${user.id}`);
-    if (saved) {
-      setRideHistory(JSON.parse(saved));
-    }
+    const fetchHistory = async () => {
+      try {
+        const response = await rideApi.getHistory();
+        const formattedHistory: RideHistoryItem[] = response.data.map((ride: any) => ({
+          id: ride._id,
+          date: new Date(ride.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
+          price: ride.price || 850,
+          pickup: ride.pickup?.address || "Kano",
+          destination: ride.destination?.address || "Kano",
+          partnerName: ride.rider?.fullName || "Ziko Rider",
+          partnerAvatar: ride.rider?.image,
+          status: RideStatus.COMPLETED
+        }));
+        setRideHistory(formattedHistory);
+      } catch (err) {
+        console.error("Failed to fetch history:", err);
+      }
+    };
+    fetchHistory();
   }, [user.id]);
+
+  const handleProfileImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.[0]) {
+      const file = e.target.files[0];
+      setIsUpdatingProfile(true);
+      try {
+        const formData = new FormData();
+        formData.append('fullName', user.name);
+        formData.append('image', file);
+        
+        const response = await profileApi.updateProfile('pilot', formData);
+        const backendUser = response.data;
+        
+        onUpdateUser({
+          ...user,
+          avatar: backendUser.image
+        });
+      } catch (err) {
+        console.error("Failed to update profile image:", err);
+        alert("Failed to update profile image.");
+      } finally {
+        setIsUpdatingProfile(false);
+      }
+    }
+  };
 
   // Simulation: Trigger a request after 3 seconds of being online
   const toggleOnline = () => {
@@ -57,12 +100,25 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout }) => {
       {/* Header */}
       <div className="p-6 bg-white luxury-shadow flex justify-between items-center relative z-10">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-slate-200 rounded-xl overflow-hidden border-2 border-emerald-50">
+          <label className="w-10 h-10 bg-slate-200 rounded-xl overflow-hidden border-2 border-emerald-50 cursor-pointer hover:border-emerald-500 transition-all relative">
+            {isUpdatingProfile ? (
+              <div className="absolute inset-0 bg-white/80 flex items-center justify-center">
+                <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+            ) : null}
             <img src={user.avatar || `https://picsum.photos/100/100?random=${user.id}`} alt="Me" className="w-full h-full object-cover" />
-          </div>
+            <input type="file" className="hidden" onChange={handleProfileImageChange} disabled={isUpdatingProfile} />
+          </label>
           <div>
-            <p className="font-bold text-slate-800 text-sm">{user.name}</p>
-            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{user.plateNumber || 'KKE-12-KNO'}</p>
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <p className="font-bold text-slate-800 text-sm leading-none">{user.name}</p>
+              {user.isVerified ? (
+                <span className="bg-emerald-100 text-emerald-700 text-[8px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-widest border border-emerald-200">Verified</span>
+              ) : (
+                <span className="bg-amber-100 text-amber-700 text-[8px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-widest border border-amber-200">Unverified</span>
+              )}
+            </div>
+            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest leading-none">{user.plateNumber || 'KKE-12-KNO'}</p>
           </div>
         </div>
         <div className="flex gap-4 items-center">

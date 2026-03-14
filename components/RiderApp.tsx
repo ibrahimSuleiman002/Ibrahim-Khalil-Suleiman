@@ -3,13 +3,15 @@ import React, { useState, useEffect } from 'react';
 import { User, Location, RideType, RideStatus, RideHistoryItem } from '../types';
 import { KANO_LANDMARKS } from '../constants';
 import RideHistory from './RideHistory';
+import { rideApi, profileApi } from '../services/api';
 
 interface RiderAppProps {
   user: User;
   onLogout: () => void;
+  onUpdateUser: (user: User) => void;
 }
 
-const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
+const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser }) => {
   const [status, setStatus] = useState<RideStatus>(RideStatus.IDLE);
   const [pickup, setPickup] = useState<string>('Current Location');
   const [destination, setDestination] = useState<string>('');
@@ -19,14 +21,56 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
   const [basePrice, setBasePrice] = useState(300);
   const [bargainPrice, setBargainPrice] = useState(300);
   const [rideHistory, setRideHistory] = useState<RideHistoryItem[]>([]);
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
 
-  // Simulation: Load history from local storage
+  // Fetch history from backend
   useEffect(() => {
-    const saved = localStorage.getItem(`ziko_history_${user.id}`);
-    if (saved) {
-      setRideHistory(JSON.parse(saved));
-    }
+    const fetchHistory = async () => {
+      try {
+        const response = await rideApi.getHistory();
+        // Map backend ride to RideHistoryItem
+        const formattedHistory: RideHistoryItem[] = response.data.map((ride: any) => ({
+          id: ride._id,
+          date: new Date(ride.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
+          price: ride.price || 0, // Fallback if price not in model yet
+          pickup: ride.pickup?.address || "Kano",
+          destination: ride.destination?.address || "Kano",
+          partnerName: ride.pilot?.fullName || "Ziko Pilot",
+          partnerAvatar: ride.pilot?.image,
+          status: RideStatus.COMPLETED
+        }));
+        setRideHistory(formattedHistory);
+      } catch (err) {
+        console.error("Failed to fetch history:", err);
+      }
+    };
+    fetchHistory();
   }, [user.id]);
+
+  const handleProfileImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.[0]) {
+      const file = e.target.files[0];
+      setIsUpdatingProfile(true);
+      try {
+        const formData = new FormData();
+        formData.append('fullName', user.name);
+        formData.append('image', file);
+        
+        const response = await profileApi.updateProfile('rider', formData);
+        const backendUser = response.data;
+        
+        onUpdateUser({
+          ...user,
+          avatar: backendUser.image
+        });
+      } catch (err) {
+        console.error("Failed to update profile image:", err);
+        alert("Failed to update profile image.");
+      } finally {
+        setIsUpdatingProfile(false);
+      }
+    }
+  };
 
   // Simulate Map Interactions
   const handleDestinationSelect = (place: string) => {
@@ -103,13 +147,19 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
       {/* Header */}
       <div className="absolute top-4 left-4 right-4 flex justify-between items-center z-20 pointer-events-none">
         <div className="flex items-center gap-3 pointer-events-auto">
-          <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center luxury-shadow overflow-hidden">
+          <label className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center luxury-shadow overflow-hidden cursor-pointer hover:border-emerald-500 border-2 border-transparent transition-all relative">
+            {isUpdatingProfile ? (
+              <div className="absolute inset-0 bg-white/80 flex items-center justify-center">
+                <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+            ) : null}
             {user.avatar ? (
               <img src={user.avatar} alt="Profile" className="w-full h-full object-cover" />
             ) : (
               <span className="text-xl">👤</span>
             )}
-          </div>
+            <input type="file" className="hidden" onChange={handleProfileImageChange} disabled={isUpdatingProfile} />
+          </label>
           <div className="bg-white px-4 py-2 rounded-2xl luxury-shadow flex flex-col justify-center">
             <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider leading-none mb-1">Welcome, {user.name.split(' ')[0]}</p>
             <div className="flex gap-2">
@@ -130,7 +180,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout }) => {
           </div>
         </div>
         <div className="px-4 py-2 bg-[#065f46] text-white rounded-full text-xs font-bold luxury-shadow pointer-events-auto">
-          ZIKO KANO
+          ZIKO
         </div>
       </div>
 
