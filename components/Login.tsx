@@ -30,6 +30,11 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [vehicleType, setVehicleType] = useState('Standard Keke');
   const [plateNumber, setPlateNumber] = useState('');
+  const [nin, setNin] = useState('');
+  const [ninStatus, setNinStatus] = useState<'idle' | 'verifying' | 'valid' | 'invalid'>('idle');
+  const [ninError, setNinError] = useState('');
+  const [plateNumberImageFile, setPlateNumberImageFile] = useState<File | null>(null);
+  const [vehicleDocumentFile, setVehicleDocumentFile] = useState<File | null>(null);
 
   const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
 
@@ -44,6 +49,36 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     });
     return () => unsubscribe();
   }, [step]);
+
+  // NIN Verification Logic
+  useEffect(() => {
+    if (nin.length === 11) {
+      const verify = async () => {
+        setNinStatus('verifying');
+        setNinError('');
+        try {
+          const response = await authApi.verifyNin(nin);
+          if (response.data.valid) {
+            setNinStatus('valid');
+          } else {
+            setNinStatus('invalid');
+            setNinError(response.data.message || 'Invalid NIN');
+          }
+        } catch (err: any) {
+          setNinStatus('invalid');
+          setNinError(err.response?.data?.message || 'Verification failed');
+        }
+      };
+      const timer = setTimeout(verify, 500);
+      return () => clearTimeout(timer);
+    } else if (nin.length > 0) {
+      setNinStatus('invalid');
+      setNinError('NIN must be 11 digits');
+    } else {
+      setNinStatus('idle');
+      setNinError('');
+    }
+  }, [nin]);
 
   const setupRecaptcha = () => {
     if (!recaptchaRef.current) {
@@ -108,17 +143,28 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         localStorage.setItem('ziko_token', token);
         
         if (backendUser.fullName) {
-          onLogin({
-            id: backendUser._id,
-            name: backendUser.fullName,
-            phone: backendUser.phone,
-            role: role!,
-            avatar: backendUser.image,
-            isVerified: backendUser.verified,
-            vehicleType: backendUser.vehicleType,
-            plateNumber: backendUser.plateNumber,
-            isDriverVerified: backendUser.verified
-          });
+          // Force profile setup if user is a rider upgrading to pilot
+          if (role === UserRole.DRIVER && backendUser.role === 'rider') {
+             // We need to fill in current name so they only see the missing fields
+             setName(backendUser.fullName);
+             setAvatar(backendUser.image || '');
+             setStep('profile');
+          } else {
+            onLogin({
+              id: backendUser._id,
+              name: backendUser.fullName,
+              phone: backendUser.phone,
+              role: backendUser.role === 'pilot' ? UserRole.DRIVER : UserRole.RIDER,
+              avatar: backendUser.image,
+              isVerified: backendUser.verified,
+              vehicleType: backendUser.vehicleType,
+              plateNumber: backendUser.plateNumber,
+              nin: backendUser.nin,
+              plateNumberImage: backendUser.plateNumberImage,
+              vehicleDocument: backendUser.vehicleDocument,
+              isDriverVerified: backendUser.verified
+            });
+          }
         } else {
           setStep('profile');
         }
@@ -140,6 +186,31 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     if (!role) return;
 
     setError(null);
+    if (!avatarFile && !avatar) {
+      setError("Please select a profile image before continuing.");
+      return;
+    }
+    
+    // Stricter Pilot validation
+    if (role === UserRole.DRIVER) {
+      if (!nin || ninStatus !== 'valid') {
+        setError("Please provide a valid 11-digit NIN.");
+        return;
+      }
+      if (!plateNumber) {
+        setError("Please provide your plate number.");
+        return;
+      }
+      if (!plateNumberImageFile) {
+        setError("Please upload your plate number image.");
+        return;
+      }
+      if (!vehicleDocumentFile) {
+        setError("Please upload your vehicle document.");
+        return;
+      }
+    }
+
     setIsVerifying(true);
 
     try {
@@ -151,7 +222,14 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       if (role === UserRole.DRIVER) {
         formData.append('vehicleType', vehicleType);
         formData.append('plateNumber', plateNumber);
+        if (plateNumberImageFile) {
+          formData.append('plateNumberImage', plateNumberImageFile);
+        }
+        if (vehicleDocumentFile) {
+          formData.append('vehicleDocument', vehicleDocumentFile);
+        }
       }
+      formData.append('nin', nin);
 
       const backendRole = role === UserRole.RIDER ? 'rider' : 'pilot';
       const response = await profileApi.updateProfile(backendRole, formData);
@@ -161,11 +239,14 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         id: backendUser._id,
         name: backendUser.fullName,
         phone: backendUser.phone,
-        role: role,
+        role: backendUser.role === 'pilot' ? UserRole.DRIVER : UserRole.RIDER,
         avatar: backendUser.image,
         isVerified: backendUser.verified,
         vehicleType: backendUser.vehicleType,
         plateNumber: backendUser.plateNumber,
+        nin: backendUser.nin,
+        plateNumberImage: backendUser.plateNumberImage,
+        vehicleDocument: backendUser.vehicleDocument,
         isDriverVerified: backendUser.verified
       };
       onLogin(newUser);
@@ -178,7 +259,12 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         if (typeof data.error === 'string') {
           errorMsg = data.error;
         } else if (typeof data === 'string') {
-          errorMsg = data;
+          // If it's an HTML error page, try to extract specific message or use generic
+          if (data.includes('<!DOCTYPE html>')) {
+             errorMsg = "Server connection error (500). Please check your internet or try later.";
+          } else {
+             errorMsg = data;
+          }
         } else {
           errorMsg = JSON.stringify(data);
         }
@@ -365,6 +451,38 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   />
                 </div>
 
+                <div>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider ml-1">NIN (National Identity Number)</label>
+                  <div className="relative">
+                    <input
+                      required
+                      type="text"
+                      maxLength={11}
+                      value={nin}
+                      onChange={(e) => setNin(e.target.value.replace(/\D/g, ''))}
+                      placeholder="Enter 11-digit NIN"
+                      className={`w-full px-4 py-4 bg-slate-50 border-none rounded-2xl font-bold focus:ring-2 ${ninStatus === 'valid' ? 'focus:ring-emerald-500' : ninStatus === 'invalid' ? 'focus:ring-red-500' : 'focus:ring-[#065f46]'}`}
+                    />
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                      {ninStatus === 'verifying' && (
+                        <div className="w-4 h-4 border-2 border-slate-300 border-t-emerald-500 rounded-full animate-spin"></div>
+                      )}
+                      {ninStatus === 'valid' && (
+                        <span className="text-emerald-500 font-bold text-xl">✓</span>
+                      )}
+                      {ninStatus === 'invalid' && (
+                        <span className="text-red-500 font-bold text-xl">✕</span>
+                      )}
+                    </div>
+                  </div>
+                  {ninError && (
+                    <p className="text-[10px] text-red-500 font-bold mt-1 ml-1">{ninError}</p>
+                  )}
+                  {ninStatus === 'valid' && (
+                    <p className="text-[10px] text-emerald-600 font-bold mt-1 ml-1">IDENTITY VERIFIED BY NIMC</p>
+                  )}
+                </div>
+
                 {role === UserRole.DRIVER && (
                   <>
                     <div>
@@ -390,7 +508,60 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                         className="w-full px-4 py-4 bg-slate-50 border-none rounded-2xl font-bold focus:ring-2 focus:ring-[#065f46]"
                       />
                     </div>
-                    {role === UserRole.DRIVER && name && avatarFile && plateNumber && (
+
+                    <div>
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-wider ml-1">Plate Number Image</label>
+                      <div className="relative group">
+                        <div className="w-full h-32 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center overflow-hidden transition-all hover:border-[#065f46] hover:bg-emerald-50/30">
+                          {plateNumberImageFile ? (
+                            <img src={URL.createObjectURL(plateNumberImageFile)} alt="Plate Number" className="w-full h-full object-contain" />
+                          ) : (
+                            <>
+                              <span className="text-2xl mb-1">📸</span>
+                              <p className="text-[10px] font-bold text-slate-400">UPLOAD PLATE IMAGE</p>
+                            </>
+                          )}
+                        </div>
+                        <input
+                          required
+                          type="file"
+                          accept="image/*"
+                          className="absolute inset-0 opacity-0 cursor-pointer"
+                          onChange={(e) => {
+                            if (e.target.files?.[0]) setPlateNumberImageFile(e.target.files[0]);
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-wider ml-1">Vehicle Document</label>
+                      <div className="relative group">
+                        <div className="w-full h-32 bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center overflow-hidden transition-all hover:border-[#065f46] hover:bg-emerald-50/30">
+                          {vehicleDocumentFile ? (
+                            <div className="text-center p-4">
+                              <span className="text-2xl">📄</span>
+                              <p className="text-xs font-bold text-[#065f46] truncate max-w-[200px]">{vehicleDocumentFile.name}</p>
+                            </div>
+                          ) : (
+                            <>
+                              <span className="text-2xl mb-1">📁</span>
+                              <p className="text-[10px] font-bold text-slate-400">UPLOAD DOCUMENT</p>
+                            </>
+                          )}
+                        </div>
+                        <input
+                          required
+                          type="file"
+                          accept="image/*,application/pdf"
+                          className="absolute inset-0 opacity-0 cursor-pointer"
+                          onChange={(e) => {
+                            if (e.target.files?.[0]) setVehicleDocumentFile(e.target.files[0]);
+                          }}
+                        />
+                      </div>
+                    </div>
+                    {role === UserRole.DRIVER && name && (avatarFile || avatar) && plateNumber && ninStatus === 'valid' && plateNumberImageFile && vehicleDocumentFile && (
                       <div className="p-4 bg-emerald-50 rounded-2xl flex items-center gap-3 animate-in fade-in zoom-in duration-300">
                         <div className="w-6 h-6 bg-emerald-500 text-white rounded-full flex items-center justify-center text-[10px]">✓</div>
                         <p className="text-xs font-bold text-emerald-800">IDENTITY VERIFICATION READY</p>
@@ -400,6 +571,14 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 )}
               </div>
             </div>
+
+            {error && (
+              <div className="bg-red-50 p-4 rounded-2xl border border-red-100">
+                <p className="text-red-500 text-xs font-bold text-center">
+                  {typeof error === 'string' ? error : JSON.stringify(error)}
+                </p>
+              </div>
+            )}
 
             <button
               type="submit"
@@ -412,6 +591,16 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   Registering...
                 </>
               ) : "Complete Registration"}
+            </button>
+            <button 
+              type="button" 
+              onClick={() => {
+                setStep('role');
+                setError(null);
+              }} 
+              className="w-full text-slate-400 font-medium text-sm"
+            >
+              Go Back
             </button>
           </form>
         )}

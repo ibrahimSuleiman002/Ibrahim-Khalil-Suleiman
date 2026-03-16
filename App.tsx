@@ -10,6 +10,7 @@ import { authApi } from './services/api';
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [activeRole, setActiveRole] = useState<UserRole | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   // Sync with Firebase Auth
@@ -22,10 +23,12 @@ const App: React.FC = () => {
         if (savedToken && savedUser) {
           const user = JSON.parse(savedUser);
           setCurrentUser(user);
+          setActiveRole(user.role);
           refreshUserData(user.role);
         }
       } else {
         setCurrentUser(null);
+        setActiveRole(null);
         localStorage.removeItem('ziko_token');
         localStorage.removeItem('ziko_user');
       }
@@ -61,6 +64,9 @@ const App: React.FC = () => {
         isVerified: backendUser.verified,
         vehicleType: backendUser.vehicleType,
         plateNumber: backendUser.plateNumber,
+        nin: backendUser.nin,
+        plateNumberImage: backendUser.plateNumberImage,
+        vehicleDocument: backendUser.vehicleDocument,
         isDriverVerified: backendUser.verified
       };
       
@@ -76,11 +82,13 @@ const App: React.FC = () => {
 
   const handleLogin = (user: User) => {
     setCurrentUser(user);
+    setActiveRole(user.role);
     localStorage.setItem('ziko_user', JSON.stringify(user));
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
+    setActiveRole(null);
     localStorage.removeItem('ziko_user');
     localStorage.removeItem('ziko_token');
     auth.signOut();
@@ -109,11 +117,21 @@ const App: React.FC = () => {
 
   return (
     <div className="h-screen w-screen bg-slate-50 overflow-hidden relative">
-      {currentUser.role === UserRole.RIDER && (
-        <RiderApp user={currentUser} onLogout={handleLogout} onUpdateUser={handleUpdateUser} />
+      {activeRole === UserRole.RIDER && (
+        <RiderApp 
+          user={currentUser} 
+          onLogout={handleLogout} 
+          onUpdateUser={handleUpdateUser} 
+          onSwitchToDriver={() => setActiveRole(UserRole.DRIVER)}
+        />
       )}
-      {currentUser.role === UserRole.DRIVER && (
-        <DriverApp user={currentUser} onLogout={handleLogout} onUpdateUser={handleUpdateUser} />
+      {activeRole === UserRole.DRIVER && (
+        <DriverApp 
+          user={currentUser} 
+          onLogout={handleLogout} 
+          onUpdateUser={handleUpdateUser}
+          onSwitchToRider={() => setActiveRole(UserRole.RIDER)}
+        />
       )}
     </div>
   );

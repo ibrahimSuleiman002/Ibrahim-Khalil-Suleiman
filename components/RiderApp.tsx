@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { User, Location, RideType, RideStatus, RideHistoryItem } from '../types';
+import { User, Location, RideType, UserRole, RideStatus, RideHistoryItem } from '../types';
 import { KANO_LANDMARKS } from '../constants';
 import RideHistory from './RideHistory';
 import { rideApi, profileApi } from '../services/api';
@@ -9,9 +9,10 @@ interface RiderAppProps {
   user: User;
   onLogout: () => void;
   onUpdateUser: (user: User) => void;
+  onSwitchToDriver: () => void;
 }
 
-const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser }) => {
+const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwitchToDriver }) => {
   const [status, setStatus] = useState<RideStatus>(RideStatus.IDLE);
   const [pickup, setPickup] = useState<string>('Current Location');
   const [destination, setDestination] = useState<string>('');
@@ -55,10 +56,10 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser }) => 
         const formData = new FormData();
         formData.append('fullName', user.name);
         formData.append('image', file);
-        
+
         const response = await profileApi.updateProfile('rider', formData);
         const backendUser = response.data;
-        
+
         onUpdateUser({
           ...user,
           avatar: backendUser.image
@@ -176,6 +177,17 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser }) => 
               >
                 History
               </button>
+              {user.role === UserRole.DRIVER && (
+                <>
+                  <span className="text-slate-200">|</span>
+                  <button
+                    onClick={onSwitchToDriver}
+                    className="text-[10px] font-black text-amber-600 hover:text-amber-700 transition-colors text-left uppercase tracking-tighter"
+                  >
+                    Pilot
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -254,7 +266,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser }) => 
                 onClick={handleRequestRide}
                 className="w-full py-5 bg-[#065f46] text-white rounded-[24px] font-bold text-lg disabled:opacity-30 disabled:grayscale transition-all shadow-xl shadow-emerald-900/10"
               >
-                {rideType === RideType.SHARED ? 'Find Shared Ride' : 'Request Private Keke'}
+                {rideType === RideType.SHARED ? 'Find Ride' : 'Request Private Keke'}
               </button>
             </div>
           )}

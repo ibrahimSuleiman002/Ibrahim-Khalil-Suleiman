@@ -18,6 +18,7 @@ api.interceptors.request.use((config) => {
 export const authApi = {
   firebaseLogin: (idToken: string, phone: string, role: string) =>
     api.post('/auth/firebase-login', { idToken, phone, role }),
+  verifyNin: (nin: string) => api.post('/auth/verify-nin', { nin }),
   getMe: (role: 'rider' | 'pilot') => api.get(`/${role}s/me`),
 };
 

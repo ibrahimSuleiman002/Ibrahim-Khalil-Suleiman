@@ -8,9 +8,10 @@ interface DriverAppProps {
   user: User;
   onLogout: () => void;
   onUpdateUser: (user: User) => void;
+  onSwitchToRider: () => void;
 }
 
-const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser }) => {
+const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onSwitchToRider }) => {
   const [isOnline, setIsOnline] = useState(false);
   const [activeRide, setActiveRide] = useState<any>(null);
   const [showIncoming, setShowIncoming] = useState(false);
@@ -123,6 +124,12 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser }) =
         </div>
         <div className="flex gap-4 items-center">
           <button
+            onClick={onSwitchToRider}
+            className="text-[10px] font-black text-amber-600 hover:text-amber-700 transition-colors uppercase tracking-tighter"
+          >
+            Switch to Rider
+          </button>
+          <button
             onClick={() => setShowHistory(true)}
             className="text-[10px] font-black text-[#065f46] hover:text-[#059669] transition-colors uppercase tracking-tighter"
           >
@@ -173,8 +180,17 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser }) =
 
       {/* Bottom Controls */}
       <div className="p-6 bg-white rounded-t-[40px] luxury-shadow">
+        {!user.isVerified && (
+          <div className="mb-4 p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-center gap-3">
+            <span className="text-xl">⚠️</span>
+            <p className="text-[11px] font-bold text-amber-700 leading-tight">
+              ACCOUNT UNDER REVIEW<br/>
+              <span className="opacity-70 font-medium">You cannot go online until your NIN and documents are verified.</span>
+            </p>
+          </div>
+        )}
         <button
-          disabled={!!activeRide}
+          disabled={!!activeRide || !user.isVerified}
           onClick={toggleOnline}
           className={`w-full py-5 rounded-[24px] font-black text-lg transition-all duration-500 disabled:opacity-50 ${isOnline ? 'bg-red-50 text-red-600' : 'bg-[#065f46] text-white shadow-xl shadow-emerald-900/20'}`}
         >

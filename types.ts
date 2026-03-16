@@ -35,6 +35,9 @@ export interface User {
   isVerified: boolean;
   vehicleType?: string;
   plateNumber?: string;
+  nin?: string;
+  plateNumberImage?: string;
+  vehicleDocument?: string;
   isDriverVerified?: boolean;
 }
 
