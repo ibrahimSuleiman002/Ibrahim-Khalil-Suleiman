@@ -31,8 +31,12 @@ export const profileApi = {
 
 export const rideApi = {
   getHistory: () => api.get('/rides/history'),
-  requestRide: (pickup: any, destination: any) => api.post('/rides/request', { pickup, destination }),
+  requestRide: (pickup: any, destination: any, pickupAddress: string, destinationAddress: string, price: number, type: string) => 
+    api.post('/rides/request', { pickup, destination, pickupAddress, destinationAddress, price, type }),
   acceptRide: (rideId: string) => api.post(`/rides/accept/${rideId}`),
+  getActiveRide: () => api.get('/rides/active'),
+  completeRideRider: (rideId: string) => api.post(`/rides/complete-rider/${rideId}`),
+  completeRidePilot: (rideId: string) => api.post(`/rides/complete-pilot/${rideId}`),
 };
 
 export default api;

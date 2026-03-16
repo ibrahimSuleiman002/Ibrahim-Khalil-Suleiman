@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { User, RideStatus, RideHistoryItem } from '../types';
 import RideHistory from './RideHistory';
 import { rideApi, profileApi } from '../services/api';
+import { io, Socket } from 'socket.io-client';
 
 interface DriverAppProps {
   user: User;
@@ -18,6 +19,8 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
   const [showHistory, setShowHistory] = useState(false);
   const [rideHistory, setRideHistory] = useState<RideHistoryItem[]>([]);
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [incomingRide, setIncomingRide] = useState<any>(null);
 
   // Fetch history from backend
   useEffect(() => {
@@ -40,6 +43,57 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
       }
     };
     fetchHistory();
+  }, [user.id]);
+
+  // Fetch Active Ride on Mount
+  useEffect(() => {
+    const fetchActive = async () => {
+      try {
+        const response = await rideApi.getActiveRide();
+        const { activeRide } = response.data;
+        
+        if (activeRide) {
+          setActiveRide(activeRide);
+          setIsOnline(true); // Must be online to have an active ride
+        }
+      } catch (err) {
+        console.error("Failed to fetch active ride:", err);
+      }
+    };
+    fetchActive();
+  }, [user.id]);
+
+  // Socket Connection
+  useEffect(() => {
+    const newSocket = io('http://localhost:5000');
+    setSocket(newSocket);
+
+    newSocket.on('connect', () => {
+      console.log('Driver connected to socket server');
+      newSocket.emit('join', user.id);
+    });
+
+    newSocket.on('new-ride', (request) => {
+      console.log('New ride request received:', request);
+      setIncomingRide(request);
+      setShowIncoming(true);
+    });
+
+    newSocket.on('rider-completed', (data) => {
+      console.log('Rider completed the ride:', data);
+      setActiveRide((prev: any) => prev ? { ...prev, riderCompleted: true } : prev);
+      alert("Rider has marked the trip as completed. Please confirm payment.");
+    });
+
+    newSocket.on('ride-finalized', (finalRide) => {
+      console.log('Ride finalized:', finalRide);
+      setActiveRide(null);
+      alert(`Trip finalized! Total earned: ₦${finalRide.price}`);
+    });
+
+    return () => {
+      newSocket.disconnect();
+    };
   }, [user.id]);
 
   const handleProfileImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -69,31 +123,58 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
 
   // Simulation: Trigger a request after 3 seconds of being online
   const toggleOnline = () => {
-    setIsOnline(!isOnline);
-    if (!isOnline) {
-      setTimeout(() => setShowIncoming(true), 3000);
+    const newOnlineStatus = !isOnline;
+    setIsOnline(newOnlineStatus);
+    
+    if (socket) {
+      if (newOnlineStatus) {
+        socket.emit('pilot-go-online', { pilotId: user.id });
+      } else {
+        socket.emit('pilot-go-offline', { pilotId: user.id });
+        setShowIncoming(false);
+      }
     }
   };
 
-  const handleAcceptRide = () => {
-    setShowIncoming(false);
-    setActiveRide(true);
-    // Simulate ride completion after 5 seconds
-    setTimeout(() => {
-      const newRide: RideHistoryItem = {
-        id: Math.random().toString(36).substr(2, 9),
-        date: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
-        price: 850,
-        pickup: "Kurmi Market, Gate 3",
-        destination: "Bayero University (Old Site)",
-        partnerName: "Amina Suleiman", // Mock rider name
+  const handleAcceptRide = async () => {
+    if (!incomingRide) return;
+    try {
+      const response = await rideApi.acceptRide(incomingRide._id);
+      const backendRide = response.data;
+      console.log("Ride accepted:", backendRide);
+      setActiveRide(backendRide);
+      setShowIncoming(false);
+      setIncomingRide(null);
+
+      // Add to local history simulation or wait for completion
+      const historyItem: RideHistoryItem = {
+        id: backendRide._id,
+        date: new Date(backendRide.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
+        price: backendRide.price,
+        pickup: backendRide.pickupAddress || "Kano",
+        destination: backendRide.destinationAddress || "Kano",
+        partnerName: backendRide.rider?.fullName || "Ziko Rider",
+        partnerAvatar: backendRide.rider?.image,
         status: RideStatus.COMPLETED
       };
-      const updatedHistory = [newRide, ...rideHistory];
-      setRideHistory(updatedHistory);
-      localStorage.setItem(`ziko_history_${user.id}`, JSON.stringify(updatedHistory));
-      setActiveRide(null);
-    }, 5000);
+      setRideHistory([historyItem, ...rideHistory]);
+    } catch (err) {
+      console.error("Failed to accept ride:", err);
+      alert("Failed to accept ride. It might have been taken.");
+      setShowIncoming(false);
+      setIncomingRide(null);
+    }
+  };
+
+  const handleAcceptPayment = async () => {
+    if (!activeRide) return;
+    try {
+      await rideApi.completeRidePilot(activeRide._id);
+      // Wait for socket 'ride-finalized' to clear the activeRide
+    } catch (err) {
+      console.error("Failed to accept payment:", err);
+      alert("Failed to accept payment. Please try again.");
+    }
   };
 
   return (
@@ -169,11 +250,36 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
             LIVE IN KANO
           </div>
         )}
+        
         {activeRide && (
-          <div className="text-center p-8 bg-white/80 backdrop-blur-md m-6 rounded-[32px] luxury-shadow animate-pulse">
-            <div className="text-4xl mb-4">🛺</div>
+          <div className="text-center p-8 bg-white/80 backdrop-blur-md m-6 rounded-[32px] luxury-shadow border-2 border-emerald-500/20">
+            <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">🛺</div>
             <p className="font-black text-slate-800 text-xl">Ride in Progress</p>
-            <p className="text-slate-500 text-sm mt-2">Dropping off at Bayero University...</p>
+            <div className="mt-4 space-y-2">
+              <div className="flex justify-between text-xs font-bold text-slate-500 uppercase tracking-widest">
+                <span>Rider</span>
+                <span className="text-slate-800">{activeRide.rider?.fullName || 'Ziko Rider'}</span>
+              </div>
+              <div className="flex justify-between text-xs font-bold text-slate-500 uppercase tracking-widest">
+                <span>Fare</span>
+                <span className="text-emerald-600">₦{activeRide.price}</span>
+              </div>
+            </div>
+
+            {activeRide.riderCompleted && (
+              <div className="mt-8 animate-in slide-in-from-bottom-4 duration-500">
+                <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-3">Rider confirms completion</p>
+                <button
+                  onClick={handleAcceptPayment}
+                  className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-700 transition-all active:scale-95"
+                >
+                  CONFIRM PAYMENT
+                </button>
+              </div>
+            )}
+            {!activeRide.riderCompleted && (
+              <p className="text-[10px] text-slate-400 font-bold mt-6 uppercase tracking-widest">Waiting for rider to complete...</p>
+            )}
           </div>
         )}
       </div>
@@ -216,14 +322,14 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
                 <div className="w-2 bg-emerald-500 rounded-full h-12"></div>
                 <div className="flex-1">
                   <p className="text-[10px] text-slate-400 font-bold uppercase mb-1">Pickup</p>
-                  <p className="font-bold text-slate-800">Kurmi Market, Gate 3</p>
+                  <p className="font-bold text-slate-800">{incomingRide?.pickupAddress || 'Kurmi Market, Gate 3'}</p>
                 </div>
               </div>
               <div className="flex gap-4">
                 <div className="w-2 bg-amber-500 rounded-full h-12"></div>
                 <div className="flex-1">
                   <p className="text-[10px] text-slate-400 font-bold uppercase mb-1">Drop</p>
-                  <p className="font-bold text-slate-800">Bayero University (Old Site)</p>
+                  <p className="font-bold text-slate-800">{incomingRide?.destinationAddress || 'Bayero University (Old Site)'}</p>
                 </div>
               </div>
             </div>
@@ -231,11 +337,11 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
             <div className="bg-slate-50 p-4 rounded-3xl flex justify-between items-center mb-8">
               <div>
                 <p className="text-xs text-slate-400 font-bold">ESTIMATED EARNING</p>
-                <p className="text-2xl font-black text-emerald-600">₦850</p>
+                <p className="text-2xl font-black text-emerald-600">₦{incomingRide?.price || 0}</p>
               </div>
               <div className="text-right">
-                <p className="text-xs text-slate-400 font-bold">SEATS</p>
-                <p className="text-lg font-black text-slate-800">2 / 3</p>
+                <p className="text-xs text-slate-400 font-bold">TYPE</p>
+                <p className="text-lg font-black text-slate-800 uppercase">{incomingRide?.type || 'Standard'}</p>
               </div>
             </div>
 

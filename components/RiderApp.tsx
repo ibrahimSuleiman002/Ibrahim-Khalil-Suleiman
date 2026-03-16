@@ -4,6 +4,7 @@ import { User, Location, RideType, UserRole, RideStatus, RideHistoryItem } from 
 import { KANO_LANDMARKS } from '../constants';
 import RideHistory from './RideHistory';
 import { rideApi, profileApi } from '../services/api';
+import { io, Socket } from 'socket.io-client';
 
 interface RiderAppProps {
   user: User;
@@ -23,6 +24,10 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
   const [bargainPrice, setBargainPrice] = useState(300);
   const [rideHistory, setRideHistory] = useState<RideHistoryItem[]>([]);
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [activeRideData, setActiveRideData] = useState<any>(null);
+  const [activeRideId, setActiveRideId] = useState<string | null>(null);
 
   // Fetch history from backend
   useEffect(() => {
@@ -46,6 +51,73 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
       }
     };
     fetchHistory();
+  }, [user.id]);
+
+  // Fetch Active Ride on Mount
+  useEffect(() => {
+    const fetchActive = async () => {
+      try {
+        const response = await rideApi.getActiveRide();
+        const { activeRide, pendingRequest } = response.data;
+        
+        if (activeRide) {
+          setActiveRideData(activeRide);
+          setActiveRideId(activeRide._id);
+          setStatus(RideStatus.ACCEPTED); // Or IN_PROGRESS depending on backend
+          setPickup(activeRide.pickupAddress || 'Kano');
+          setDestination(activeRide.destinationAddress || 'Kano');
+          setRideType(activeRide.type.toUpperCase() as RideType);
+          setBargainPrice(activeRide.price);
+        } else if (pendingRequest) {
+          setStatus(RideStatus.SEARCHING);
+          setPickup(pendingRequest.pickupAddress || 'Kano');
+          setDestination(pendingRequest.destinationAddress || 'Kano');
+          setRideType(pendingRequest.type.toUpperCase() as RideType);
+          setBargainPrice(pendingRequest.price);
+        }
+      } catch (err) {
+        console.error("Failed to fetch active ride:", err);
+      }
+    };
+    fetchActive();
+  }, [user.id]);
+
+  // Socket Connection
+  useEffect(() => {
+    const newSocket = io('http://localhost:5000');
+    setSocket(newSocket);
+
+    newSocket.on('connect', () => {
+      console.log('Rider connected to socket');
+      newSocket.emit('join', user.id);
+    });
+
+    newSocket.on('ride-accepted', (ride) => {
+      console.log('Ride accepted by pilot:', ride);
+      setActiveRideData(ride);
+      setActiveRideId(ride._id);
+      setStatus(RideStatus.ACCEPTED);
+    });
+
+    newSocket.on('ride-finalized', (finalRide) => {
+      console.log('Ride finalized:', finalRide);
+      setStatus(RideStatus.IDLE);
+      setDestination('');
+      setActiveRideData(null);
+      setActiveRideId(null);
+      alert(`Trip completed! Price: ₦${finalRide.price}`);
+    });
+
+    newSocket.on('trip-count-update', (data) => {
+        // If ride completed, data will come here or we check status periodically
+        if (data.role === 'rider') {
+             // Potentially refresh something or handle completion
+        }
+    });
+
+    return () => {
+      newSocket.disconnect();
+    };
   }, [user.id]);
 
   const handleProfileImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -81,29 +153,44 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
     setBargainPrice(Math.floor(Math.random() * 500) + 200);
   };
 
-  const handleRequestRide = () => {
+  const handleRequestRide = async () => {
     setStatus(RideStatus.SEARCHING);
-    setTimeout(() => {
-      setStatus(RideStatus.ACCEPTED);
-      // Automatically complete ride after 5 seconds for simulation
-      setTimeout(() => {
-        const newRide: RideHistoryItem = {
-          id: Math.random().toString(36).substr(2, 9),
-          date: new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
-          price: rideType === RideType.SHARED ? basePrice : bargainPrice,
-          pickup,
-          destination,
-          partnerName: "Musa Dan Kano",
-          partnerAvatar: "https://picsum.photos/100/100?random=1",
-          status: RideStatus.COMPLETED
-        };
-        const updatedHistory = [newRide, ...rideHistory];
-        setRideHistory(updatedHistory);
-        localStorage.setItem(`ziko_history_${user.id}`, JSON.stringify(updatedHistory));
+    setError(null);
+    try {
+      // Mock coordinates for demonstration
+      const mockPickup = { lat: 11.9964, lng: 8.5167 };
+      const mockDestination = { lat: 12.0022, lng: 8.5919 };
+      const price = rideType === RideType.SHARED ? basePrice : bargainPrice;
+      
+      const response = await rideApi.requestRide(mockPickup, mockDestination, pickup, destination, price, rideType);
+      console.log("Ride requested:", response.data);
+      // Wait for socket notification 'ride-accepted'
+    } catch (err: any) {
+      console.error("Ride Request Error:", err);
+      setStatus(RideStatus.IDLE);
+      if (err.response?.status === 404 && err.response?.data?.error === "No available pilot yet") {
+        alert("No available pilot yet");
+      } else {
+        alert(err.response?.data?.error || "Failed to request ride. Please try again.");
+      }
+    }
+  };
+
+  const handleCompleteRide = async () => {
+    if (!activeRideId) return;
+    try {
+        await rideApi.completeRideRider(activeRideId);
+        // Status will be IDLE if the backend logic works or we can set it here
+        // Actually, finalizeRideIfPossible marks it as completed in DB
+        // For now, let's just reset locally after rider completes
         setStatus(RideStatus.IDLE);
         setDestination('');
-      }, 5000);
-    }, 3000);
+        setActiveRideData(null);
+        setActiveRideId(null);
+    } catch (err) {
+        console.error("Failed to complete ride:", err);
+        alert("Failed to complete ride.");
+    }
   };
 
   return (
@@ -284,31 +371,35 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
             </div>
           )}
 
-          {status === RideStatus.ACCEPTED && (
+          {status === RideStatus.ACCEPTED && activeRideData && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-bold text-slate-800">Driver is Arriving</h3>
-                  <p className="text-sm text-emerald-600 font-medium">3 mins away • KKE-12-KNO</p>
+                  <h3 className="text-lg font-bold text-slate-800">
+                    {activeRideData.status === 'ongoing' ? 'Ride In Progress' : 'Driver is Arriving'}
+                  </h3>
+                  <p className="text-sm text-emerald-600 font-medium">
+                    {activeRideData.status === 'ongoing' ? 'On the way to destination' : 'Arriving soon'} • {activeRideData.pilot?.plateNumber || 'KKE-12-KNO'}
+                  </p>
                 </div>
                 <button className="w-12 h-12 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center font-bold">SOS</button>
               </div>
-
+ 
               <div className="flex items-center gap-4 p-4 bg-slate-50 rounded-3xl">
                 <div className="w-14 h-14 bg-slate-200 rounded-2xl overflow-hidden">
-                  <img src="https://picsum.photos/100/100?random=1" alt="Driver" />
+                  <img src={activeRideData.pilot?.image || `https://picsum.photos/100/100?random=${activeRideData.pilot?._id}`} alt="Driver" className="w-full h-full object-cover" />
                 </div>
                 <div className="flex-1">
-                  <p className="font-bold text-slate-800">Musa Dan Kano</p>
-                  <p className="text-xs text-slate-500">⭐ 4.9 • 1,200+ rides</p>
+                  <p className="font-bold text-slate-800">{activeRideData.pilot?.fullName || "Ziko Pilot"}</p>
+                  <p className="text-xs text-slate-500">⭐ 4.9 • {activeRideData.pilot?.phone || 'Contact Pilot'}</p>
                 </div>
                 <button className="w-10 h-10 bg-[#065f46] text-white rounded-full flex items-center justify-center">📞</button>
               </div>
-
+ 
               <div className="grid grid-cols-2 gap-4">
                 <div className="p-4 bg-emerald-50 rounded-2xl">
                   <p className="text-[10px] uppercase font-bold text-emerald-700 tracking-wider">Fare</p>
-                  <p className="text-lg font-bold text-emerald-900">₦{rideType === RideType.SHARED ? basePrice : bargainPrice}</p>
+                  <p className="text-lg font-bold text-emerald-900">₦{activeRideData.price}</p>
                 </div>
                 <div className="p-4 bg-slate-50 rounded-2xl">
                   <p className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Payment</p>
@@ -316,12 +407,20 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
                 </div>
               </div>
 
-              <button
-                onClick={() => setStatus(RideStatus.IDLE)}
-                className="w-full py-4 text-slate-400 font-medium text-sm"
-              >
-                Cancel Ride
-              </button>
+              <div className="space-y-3">
+                <button
+                    onClick={handleCompleteRide}
+                    className="w-full py-4 bg-[#065f46] text-white rounded-2xl font-bold shadow-lg"
+                >
+                    Mark as Completed
+                </button>
+                <button
+                    onClick={() => setStatus(RideStatus.IDLE)}
+                    className="w-full py-3 text-slate-400 font-medium text-xs"
+                >
+                    Minimize (Stay in Dash)
+                </button>
+              </div>
             </div>
           )}
         </div>
