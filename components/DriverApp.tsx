@@ -65,7 +65,7 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
 
   // Socket Connection
   useEffect(() => {
-    const newSocket = io('http://localhost:5000');
+    const newSocket = io('https://ziko-backend.onrender.com');
     setSocket(newSocket);
 
     newSocket.on('connect', () => {
