@@ -6,15 +6,37 @@ interface RideHistoryProps {
     history: RideHistoryItem[];
     onBack: () => void;
     title: string;
+    balance?: number;
+    trips?: number;
 }
 
-const RideHistory: React.FC<RideHistoryProps> = ({ history, onBack, title }) => {
+const RideHistory: React.FC<RideHistoryProps> = ({ history, onBack, title, balance, trips }) => {
     return (
         <div className="absolute inset-0 bg-white z-50 flex flex-col p-6 animate-in slide-in-from-right duration-300">
-            <div className="flex items-center gap-4 mb-8">
+            <div className="flex items-center gap-4 mb-6">
                 <button onClick={onBack} className="text-2xl w-10 h-10 flex items-center justify-center bg-slate-50 rounded-full">←</button>
                 <h2 className="text-2xl font-black text-slate-800">{title}</h2>
             </div>
+            
+            {(balance !== undefined || trips !== undefined) && (
+                <div className="flex gap-4 mb-8">
+                    {balance !== undefined && (
+                        <div className="flex-1 px-5 py-5 bg-[#065f46] text-white rounded-[24px] luxury-shadow flex flex-col justify-center">
+                            <span className="text-xs uppercase font-bold text-emerald-300 tracking-wider">Balance</span>
+                            <span className="text-3xl font-black leading-tight mt-1">₦{balance.toLocaleString()}</span>
+                        </div>
+                    )}
+                    {trips !== undefined && (
+                        <div className="flex-[0.8] px-5 py-5 bg-white text-slate-800 border-2 border-slate-100 rounded-[24px] luxury-shadow flex flex-col justify-center">
+                            <span className="text-xs uppercase font-bold text-slate-400 tracking-wider">Trips</span>
+                            <div className="flex items-center gap-2 mt-1">
+                                <span className="text-2xl">🏆</span>
+                                <span className="text-3xl font-black leading-tight">{trips}</span>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
 
             <div className="flex-1 overflow-y-auto space-y-4 pb-10 custom-scrollbar">
                 {history.length === 0 ? (

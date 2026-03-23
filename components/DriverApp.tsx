@@ -27,6 +27,7 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
   const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
   const [riderLocation, setRiderLocation] = useState<Location | null>(null);
   const [riderPath, setRiderPath] = useState<Location[]>([]);
+  const [processingAction, setProcessingAction] = useState<string | null>(null);
 
   // Fetch history from backend
   useEffect(() => {
@@ -90,11 +91,20 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
 
     if (isOnline && !activeRide && !incomingRide) {
       fetchRequests(); // Initial fetch
-      interval = setInterval(fetchRequests, 10000); // Poll every 10s
+      interval = setInterval(fetchRequests, 5000); // Poll every 5s
     }
+
+    const handleOnline = () => {
+      if (isOnline && !activeRide && !incomingRide) {
+        console.log("Network back online, fetching requests immediately...");
+        fetchRequests();
+      }
+    };
+    window.addEventListener('online', handleOnline);
 
     return () => {
         if (interval) clearInterval(interval);
+        window.removeEventListener('online', handleOnline);
     };
   }, [isOnline, activeRide, incomingRide]);
 
@@ -244,6 +254,7 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
 
   const handleAcceptRide = async () => {
     if (!incomingRide) return;
+    setProcessingAction('accept');
     try {
       const response = await rideApi.acceptRide(incomingRide._id);
       const backendRide = response.data;
@@ -258,11 +269,14 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
       alert("Failed to accept ride. It might have been taken.");
       setShowIncoming(false);
       setIncomingRide(null);
+    } finally {
+      setProcessingAction(null);
     }
   };
 
   const handleCancelRide = async () => {
     if (!activeRide) return;
+    setProcessingAction('cancel');
     try {
         await rideApi.cancelRide(activeRide._id);
         setActiveRide(null);
@@ -274,17 +288,22 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
             console.error("Cancellation Error Response:", err.response.data);
         }
         alert(`Failed to cancel ride: ${err.response?.data?.error || err.message}`);
+    } finally {
+        setProcessingAction(null);
     }
   };
 
   const handleAcceptPayment = async () => {
     if (!activeRide) return;
+    setProcessingAction('complete');
     try {
       await rideApi.completeRidePilot(activeRide._id);
       // Wait for socket 'ride-finalized' to clear the activeRide
     } catch (err) {
       console.error("Failed to accept payment:", err);
       alert("Failed to accept payment. Please try again.");
+    } finally {
+      setProcessingAction(null);
     }
   };
 
@@ -359,6 +378,7 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
                 >
                   History
                 </button>
+                {/* 
                 <span className="text-slate-200">|</span>
                 <button
                   onClick={onSwitchToRider}
@@ -366,6 +386,7 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
                 >
                   Rider Mode
                 </button>
+                */}
               </div>
             </div>
           </div>
@@ -409,9 +430,11 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
                 {activeRide.riderCompleted && (
                   <button
                     onClick={handleAcceptPayment}
-                    className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-700 transition-all"
+                    disabled={!!processingAction}
+                    className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                   >
-                    CONFIRM PAYMENT
+                    {processingAction === 'complete' && <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>}
+                    {processingAction === 'complete' ? 'PROCESSING...' : 'CONFIRM PAYMENT'}
                   </button>
                 )}
                 {!activeRide.riderCompleted && (
@@ -421,9 +444,10 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
                 )}
                 <button
                     onClick={handleCancelRide}
-                    className="w-14 h-14 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center font-bold border border-red-100"
+                    disabled={!!processingAction}
+                    className="w-14 h-14 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center font-bold border border-red-100 disabled:opacity-50"
                 >
-                    ✕
+                    {processingAction === 'cancel' ? '⏳' : '✕'}
                 </button>
             </div>
           </div>
@@ -500,9 +524,11 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
               </button>
               <button
                 onClick={handleAcceptRide}
-                className="flex-[2] py-4 bg-[#065f46] text-white rounded-2xl font-bold shadow-lg shadow-emerald-900/20"
+                disabled={!!processingAction}
+                className="flex-[2] py-4 bg-[#065f46] text-white rounded-2xl font-bold shadow-lg shadow-emerald-900/20 hover:bg-[#059669] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                Accept Ride
+                {processingAction === 'accept' && <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>}
+                {processingAction === 'accept' ? 'ACCEPTING...' : 'Accept Ride'}
               </button>
             </div>
           </div>
@@ -515,6 +541,8 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
           history={rideHistory}
           onBack={() => setShowHistory(false)}
           title="Trip Earnings"
+          balance={user.balance}
+          trips={user.trips}
         />
       )}
     </div>

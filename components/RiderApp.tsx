@@ -36,6 +36,20 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
   const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
   const [driverPath, setDriverPath] = useState<Location[]>([]);
   const [isMinimized, setIsMinimized] = useState(false);
+  const [isOfflineQueued, setIsOfflineQueued] = useState(false);
+  const [processingAction, setProcessingAction] = useState<string | null>(null);
+
+  // Auto-resume request when network is back
+  useEffect(() => {
+    const handleOnline = () => {
+      if (isOfflineQueued && destCoords && status === RideStatus.IDLE) {
+        setIsOfflineQueued(false);
+        handleRequestRide();
+      }
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, [isOfflineQueued, destCoords, status, pickupCoords, destination, basePrice, bargainPrice, rideType]);
 
   // Default Pickup to Current Location
   useEffect(() => {
@@ -277,6 +291,13 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
 
   const handleRequestRide = async () => {
     if (!destCoords) return;
+    
+    if (!navigator.onLine) {
+        setIsOfflineQueued(true);
+        alert("You are offline. We will automatically request your ride as soon as your internet connection is restored.");
+        return;
+    }
+
     setStatus(RideStatus.SEARCHING);
     setError(null);
     try {
@@ -288,6 +309,14 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
       // Wait for socket notification 'ride-accepted'
     } catch (err: any) {
       console.error("Ride Request Error:", err);
+      // If it's a network error from Axios (no response), queue it
+      if (!err.response && !navigator.onLine) {
+         setStatus(RideStatus.IDLE);
+         setIsOfflineQueued(true);
+         alert("Network disconnected. We'll keep trying when it connects.");
+         return;
+      }
+      
       setStatus(RideStatus.IDLE);
       if (err.response?.status === 404 && err.response?.data?.error === "No available pilot yet") {
         alert("No available pilot yet");
@@ -299,6 +328,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
 
   const handleCancelRide = async () => {
     if (!activeRideId) return;
+    setProcessingAction('cancel');
     try {
         if (status === RideStatus.SEARCHING) {
             await rideApi.cancelRequest(activeRideId);
@@ -317,11 +347,14 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
             console.error("Cancellation Error Response:", err.response.data);
         }
         alert(`Failed to cancel ride: ${err.response?.data?.error || err.message}`);
+    } finally {
+        setProcessingAction(null);
     }
   };
 
   const handleCompleteRide = async () => {
     if (!activeRideId) return;
+    setProcessingAction('complete');
     try {
         await rideApi.completeRideRider(activeRideId);
         // Status will be IDLE if the backend logic works or we can set it here
@@ -336,6 +369,8 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
     } catch (err) {
         console.error("Failed to complete ride:", err);
         alert("Failed to complete ride.");
+    } finally {
+        setProcessingAction(null);
     }
   };
 
@@ -526,7 +561,10 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
               </div>
               <h3 className="text-2xl font-bold text-slate-800">Searching for Pilots</h3>
               <p className="text-slate-500">Finding the best Keke near {pickup}...</p>
-              <button onClick={handleCancelRide} className="text-red-500 font-bold mt-4">Cancel Request</button>
+              <button disabled={!!processingAction} onClick={handleCancelRide} className="text-red-500 font-bold mt-4 disabled:opacity-50 flex items-center justify-center gap-2 mx-auto">
+                {processingAction === 'cancel' && <div className="w-4 h-4 border-2 border-red-500/30 border-t-red-500 rounded-full animate-spin"></div>}
+                {processingAction === 'cancel' ? 'Cancelling...' : 'Cancel Request'}
+              </button>
             </div>
           )}
 
@@ -569,15 +607,19 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
               <div className="space-y-3">
                 <button
                     onClick={handleCompleteRide}
-                    className="w-full py-4 bg-[#065f46] text-white rounded-2xl font-bold shadow-lg"
+                    disabled={!!processingAction}
+                    className="w-full py-4 bg-[#065f46] text-white rounded-2xl font-bold shadow-lg disabled:opacity-50 flex items-center justify-center gap-2"
                 >
-                    Mark as Completed
+                    {processingAction === 'complete' && <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>}
+                    {processingAction === 'complete' ? 'Processing...' : 'Mark as Completed'}
                 </button>
                 <button
                     onClick={handleCancelRide}
-                    className="w-full py-4 bg-red-50 text-red-600 rounded-2xl font-bold border border-red-100"
+                    disabled={!!processingAction}
+                    className="w-full py-4 bg-red-50 text-red-600 rounded-2xl font-bold border border-red-100 disabled:opacity-50 flex items-center justify-center gap-2"
                 >
-                    Cancel Ride
+                    {processingAction === 'cancel' && <div className="w-5 h-5 border-2 border-red-600/30 border-t-red-600 rounded-full animate-spin"></div>}
+                    {processingAction === 'cancel' ? 'Processing...' : 'Cancel Ride'}
                 </button>
                 <button
                     onClick={() => setIsMinimized(true)}
@@ -633,6 +675,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
           history={rideHistory}
           onBack={() => setShowHistory(false)}
           title="Ride History"
+          trips={user.trips}
         />
       )}
     </div>

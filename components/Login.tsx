@@ -162,7 +162,9 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               nin: backendUser.nin,
               plateNumberImage: backendUser.plateNumberImage,
               vehicleDocument: backendUser.vehicleDocument,
-              isDriverVerified: backendUser.verified
+              isDriverVerified: backendUser.verified,
+              balance: backendUser.balance || 0,
+              trips: backendUser.role === 'pilot' ? (backendUser.pilotTrips || 0) : (backendUser.riderTrips || 0)
             });
           }
         } else {
@@ -247,7 +249,9 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
         nin: backendUser.nin,
         plateNumberImage: backendUser.plateNumberImage,
         vehicleDocument: backendUser.vehicleDocument,
-        isDriverVerified: backendUser.verified
+        isDriverVerified: backendUser.verified,
+        balance: backendUser.balance || 0,
+        trips: backendUser.role === 'pilot' ? (backendUser.pilotTrips || 0) : (backendUser.riderTrips || 0)
       };
       onLogin(newUser);
     } catch (err: any) {

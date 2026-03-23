@@ -39,6 +39,8 @@ export interface User {
   plateNumberImage?: string;
   vehicleDocument?: string;
   isDriverVerified?: boolean;
+  balance?: number;
+  trips?: number;
 }
 
 export interface Keke {

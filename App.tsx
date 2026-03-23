@@ -67,7 +67,9 @@ const App: React.FC = () => {
         nin: backendUser.nin,
         plateNumberImage: backendUser.plateNumberImage,
         vehicleDocument: backendUser.vehicleDocument,
-        isDriverVerified: backendUser.verified
+        isDriverVerified: backendUser.verified,
+        balance: backendUser.balance || 0,
+        trips: roleType === UserRole.RIDER ? (backendUser.riderTrips || 0) : (backendUser.pilotTrips || 0)
       };
       
       // Only update if something changed to prevent unnecessary re-renders
