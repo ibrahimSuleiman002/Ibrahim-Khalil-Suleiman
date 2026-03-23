@@ -2,6 +2,7 @@
 import axios from 'axios';
 
 const API_BASE_URL = 'https://ziko-backend.onrender.com/api';
+// const API_BASE_URL = 'http://localhost:5000/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -35,8 +36,11 @@ export const rideApi = {
     api.post('/rides/request', { pickup, destination, pickupAddress, destinationAddress, price, type }),
   acceptRide: (rideId: string) => api.post(`/rides/accept/${rideId}`),
   getActiveRide: () => api.get('/rides/active'),
+  getActiveRequests: () => api.get('/rides/requests'),
   completeRideRider: (rideId: string) => api.post(`/rides/complete-rider/${rideId}`),
   completeRidePilot: (rideId: string) => api.post(`/rides/complete-pilot/${rideId}`),
+  cancelRide: (rideId: string) => api.post(`/rides/cancel-ride/${rideId}`),
+  cancelRequest: (requestId: string) => api.post(`/rides/cancel-request/${requestId}`),
 };
 
 export default api;

@@ -1,9 +1,11 @@
 
-import React, { useState, useEffect } from 'react';
-import { User, RideStatus, RideHistoryItem } from '../types';
+import React, { useState, useEffect, useMemo } from 'react';
+import { User, RideStatus, RideHistoryItem, Location } from '../types';
 import RideHistory from './RideHistory';
 import { rideApi, profileApi } from '../services/api';
 import { io, Socket } from 'socket.io-client';
+import GoogleMap from './GoogleMap';
+
 
 interface DriverAppProps {
   user: User;
@@ -21,6 +23,10 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [socket, setSocket] = useState<Socket | null>(null);
   const [incomingRide, setIncomingRide] = useState<any>(null);
+  const [currentLocation, setCurrentLocation] = useState<Location>({ lat: 11.9964, lng: 8.5167 });
+  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
+  const [riderLocation, setRiderLocation] = useState<Location | null>(null);
+  const [riderPath, setRiderPath] = useState<Location[]>([]);
 
   // Fetch history from backend
   useEffect(() => {
@@ -54,7 +60,7 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
         
         if (activeRide) {
           setActiveRide(activeRide);
-          setIsOnline(true); // Must be online to have an active ride
+          setIsOnline(true);
         }
       } catch (err) {
         console.error("Failed to fetch active ride:", err);
@@ -63,9 +69,38 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
     fetchActive();
   }, [user.id]);
 
+  // Poll for Active Requests when Online (Handles missed socket events)
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval>;
+    
+    const fetchRequests = async () => {
+      if (!isOnline || activeRide || incomingRide) return;
+      try {
+        const response = await rideApi.getActiveRequests();
+        const requests = response.data;
+        if (requests && requests.length > 0) {
+          // Always show the first pending request if any exists
+          setIncomingRide(requests[0]);
+          setShowIncoming(true);
+        }
+      } catch (err) {
+        console.error("Failed to fetch active requests:", err);
+      }
+    };
+
+    if (isOnline && !activeRide && !incomingRide) {
+      fetchRequests(); // Initial fetch
+      interval = setInterval(fetchRequests, 10000); // Poll every 10s
+    }
+
+    return () => {
+        if (interval) clearInterval(interval);
+    };
+  }, [isOnline, activeRide, incomingRide]);
+
   // Socket Connection
   useEffect(() => {
-    const newSocket = io('https://ziko-backend.onrender.com');
+    const newSocket = io('http://localhost:5000');
     setSocket(newSocket);
 
     newSocket.on('connect', () => {
@@ -85,16 +120,88 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
       alert("Rider has marked the trip as completed. Please confirm payment.");
     });
 
+    newSocket.on('ride-cancelled', (data) => {
+      console.log('Ride cancelled by other party:', data);
+      alert("The ride has been cancelled by the rider.");
+      setActiveRide(null);
+      setDirections(null);
+    });
+
     newSocket.on('ride-finalized', (finalRide) => {
       console.log('Ride finalized:', finalRide);
       setActiveRide(null);
+      setDirections(null);
+      setRiderLocation(null);
+      setRiderPath([]);
       alert(`Trip finalized! Total earned: ₦${finalRide.price}`);
+    });
+
+    newSocket.on('rider-location-update', (data) => {
+      console.log('Rider location update:', data);
+      setRiderLocation(data.location);
+      setRiderPath(prev => [...prev, data.location]);
     });
 
     return () => {
       newSocket.disconnect();
     };
   }, [user.id]);
+
+  // Watch location and emit to socket
+  useEffect(() => {
+    if (!isOnline) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const newLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setCurrentLocation(newLoc);
+        if (socket && activeRide) {
+          socket.emit('update-location', {
+            pilotId: user.id,
+            location: newLoc,
+            riderId: activeRide.rider?._id || activeRide.rider
+          });
+        }
+      },
+      (err) => console.error("Error watching location:", err),
+      { enableHighAccuracy: true }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [isOnline, socket, activeRide, user.id]);
+
+  // Simulation: Move location slightly if geolocation is not available or for demo
+  useEffect(() => {
+    if (!isOnline || !activeRide) return;
+    
+    const interval = setInterval(() => {
+        setCurrentLocation(prev => ({
+            lat: prev.lat + (Math.random() - 0.5) * 0.0005,
+            lng: prev.lng + (Math.random() - 0.5) * 0.0005
+        }));
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [isOnline, activeRide]);
+
+  // Get Directions for active ride
+  useEffect(() => {
+    if (activeRide && activeRide.pickup && activeRide.destination && window.google) {
+      const directionsService = new google.maps.DirectionsService();
+      directionsService.route(
+        {
+          origin: activeRide.pickup,
+          destination: activeRide.destination,
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK) {
+            setDirections(result);
+          }
+        }
+      );
+    }
+  }, [activeRide]);
 
   const handleProfileImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.[0]) {
@@ -121,7 +228,6 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
     }
   };
 
-  // Simulation: Trigger a request after 3 seconds of being online
   const toggleOnline = () => {
     const newOnlineStatus = !isOnline;
     setIsOnline(newOnlineStatus);
@@ -146,23 +252,28 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
       setShowIncoming(false);
       setIncomingRide(null);
 
-      // Add to local history simulation or wait for completion
-      const historyItem: RideHistoryItem = {
-        id: backendRide._id,
-        date: new Date(backendRide.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }),
-        price: backendRide.price,
-        pickup: backendRide.pickupAddress || "Kano",
-        destination: backendRide.destinationAddress || "Kano",
-        partnerName: backendRide.rider?.fullName || "Ziko Rider",
-        partnerAvatar: backendRide.rider?.image,
-        status: RideStatus.COMPLETED
-      };
-      setRideHistory([historyItem, ...rideHistory]);
+      // No need to manually update history here, it will be fetched or handled on completion
     } catch (err) {
       console.error("Failed to accept ride:", err);
       alert("Failed to accept ride. It might have been taken.");
       setShowIncoming(false);
       setIncomingRide(null);
+    }
+  };
+
+  const handleCancelRide = async () => {
+    if (!activeRide) return;
+    try {
+        await rideApi.cancelRide(activeRide._id);
+        setActiveRide(null);
+        setDirections(null);
+        alert("Ride cancelled successfully.");
+    } catch (err: any) {
+        console.error("Failed to cancel ride:", err);
+        if (err.response) {
+            console.error("Cancellation Error Response:", err.response.data);
+        }
+        alert(`Failed to cancel ride: ${err.response?.data?.error || err.message}`);
     }
   };
 
@@ -177,109 +288,144 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
     }
   };
 
+  const mapMarkers = useMemo(() => {
+    const markers = [];
+    if (currentLocation) {
+        markers.push({
+            id: 'me',
+            position: currentLocation,
+            title: 'Me'
+        });
+    }
+    if (activeRide) {
+        if (activeRide.pickup) {
+            markers.push({ id: 'pickup', position: activeRide.pickup, title: 'Pickup', icon: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png' });
+        }
+        if (activeRide.destination) {
+            markers.push({ id: 'destination', position: activeRide.destination, title: 'Destination', icon: 'https://maps.google.com/mapfiles/ms/icons/red-dot.png' });
+        }
+        if (riderLocation) {
+            markers.push({ 
+                id: 'rider', 
+                position: riderLocation, 
+                title: 'Rider', 
+                icon: 'https://maps.google.com/mapfiles/ms/icons/man.png' 
+            });
+        }
+    }
+    return markers;
+  }, [currentLocation, activeRide, riderLocation]);
+
   return (
     <div className="h-full w-full bg-slate-50 flex flex-col relative">
-      {/* Header */}
-      <div className="p-6 bg-white luxury-shadow flex justify-between items-center relative z-10">
-        <div className="flex items-center gap-3">
-          <label className="w-10 h-10 bg-slate-200 rounded-xl overflow-hidden border-2 border-emerald-50 cursor-pointer hover:border-emerald-500 transition-all relative">
-            {isUpdatingProfile ? (
-              <div className="absolute inset-0 bg-white/80 flex items-center justify-center">
-                <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-              </div>
-            ) : null}
-            <img src={user.avatar || `https://picsum.photos/100/100?random=${user.id}`} alt="Me" className="w-full h-full object-cover" />
-            <input type="file" className="hidden" onChange={handleProfileImageChange} disabled={isUpdatingProfile} />
-          </label>
-          <div>
-            <div className="flex items-center gap-1.5 mb-0.5">
-              <p className="font-bold text-slate-800 text-sm leading-none">{user.name}</p>
-              {user.isVerified ? (
-                <span className="bg-emerald-100 text-emerald-700 text-[8px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-widest border border-emerald-200">Verified</span>
+      {/* Map Preview Area / Active Ride */}
+      <div className="flex-1 m-6 bg-slate-200 rounded-[40px] relative overflow-hidden">
+        <GoogleMap 
+          center={currentLocation} 
+          markers={mapMarkers}
+          directions={directions}
+          paths={riderPath.length > 0 ? [{ id: 'rider-path', points: riderPath, color: '#3b82f6' }] : []}
+        />
+
+        {/* Header */}
+        <div className="absolute top-4 left-4 right-4 flex justify-between items-center z-20 pointer-events-none">
+          <div className="flex items-center gap-3 pointer-events-auto">
+            <label className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center luxury-shadow overflow-hidden cursor-pointer hover:border-emerald-500 border-2 border-transparent transition-all relative">
+              {isUpdatingProfile ? (
+                <div className="absolute inset-0 bg-white/80 flex items-center justify-center">
+                  <div className="w-4 h-4 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+                </div>
+              ) : null}
+              {user.avatar ? (
+                <img src={user.avatar} alt="Profile" className="w-full h-full object-cover" />
               ) : (
-                <span className="bg-amber-100 text-amber-700 text-[8px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-widest border border-amber-200">Unverified</span>
+                <span className="text-xl">👤</span>
               )}
+              <input type="file" className="hidden" onChange={handleProfileImageChange} disabled={isUpdatingProfile} />
+            </label>
+            <div className="bg-white px-4 py-2 rounded-2xl luxury-shadow flex flex-col justify-center">
+              <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider leading-none mb-1">Welcome, {user.name.split(' ')[0]}</p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => onLogout()}
+                  className="text-[10px] font-black text-red-500 hover:text-red-600 transition-colors text-left uppercase tracking-tighter"
+                >
+                  Sign Out
+                </button>
+                <span className="text-slate-200">|</span>
+                <button
+                  onClick={() => setShowHistory(true)}
+                  className="text-[10px] font-black text-[#065f46] hover:text-[#059669] transition-colors text-left uppercase tracking-tighter"
+                >
+                  History
+                </button>
+                <span className="text-slate-200">|</span>
+                <button
+                  onClick={onSwitchToRider}
+                  className="text-[10px] font-black text-blue-600 hover:text-blue-700 transition-colors text-left uppercase tracking-tighter"
+                >
+                  Rider Mode
+                </button>
+              </div>
             </div>
-            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest leading-none">{user.plateNumber || 'KKE-12-KNO'}</p>
+          </div>
+          <div className="px-4 py-2 bg-[#065f46] text-white rounded-full text-xs font-bold luxury-shadow pointer-events-auto">
+            PILOT
           </div>
         </div>
-        <div className="flex gap-4 items-center">
-          <button
-            onClick={onSwitchToRider}
-            className="text-[10px] font-black text-amber-600 hover:text-amber-700 transition-colors uppercase tracking-tighter"
-          >
-            Switch to Rider
-          </button>
-          <button
-            onClick={() => setShowHistory(true)}
-            className="text-[10px] font-black text-[#065f46] hover:text-[#059669] transition-colors uppercase tracking-tighter"
-          >
-            History
-          </button>
-          <button
-            onClick={() => onLogout()}
-            className="text-[10px] font-black text-red-500 hover:text-red-600 transition-colors uppercase tracking-tighter"
-          >
-            Logout
-          </button>
-        </div>
-      </div>
 
-      {/* Dashboard Stats */}
-      <div className="p-6 grid grid-cols-2 gap-4">
-        <div className="bg-[#065f46] p-6 rounded-[32px] text-white">
-          <p className="text-xs opacity-70 mb-1 font-medium">Daily Earnings</p>
-          <p className="text-2xl font-black">₦{rideHistory.reduce((acc, ride) => acc + ride.price, 0).toLocaleString()}</p>
-        </div>
-        <div className="bg-white p-6 rounded-[32px] luxury-shadow">
-          <p className="text-xs text-slate-500 mb-1 font-medium">Trips</p>
-          <p className="text-2xl font-black text-slate-800">{rideHistory.length}</p>
-        </div>
-      </div>
-
-      {/* Map Preview Area / Active Ride */}
-      <div className="flex-1 m-6 bg-slate-200 rounded-[40px] relative overflow-hidden flex items-center justify-center">
         {!isOnline && !activeRide && (
-          <div className="text-center p-8">
-            <p className="text-slate-500 font-medium mb-4">You are currently offline</p>
-            <p className="text-sm text-slate-400">Go online to start receiving ride requests from Kano.</p>
+          <div className="absolute inset-0 bg-white/60 backdrop-blur-sm flex items-center justify-center p-8">
+            <div className="text-center">
+                <p className="text-slate-500 font-medium mb-4">You are currently offline</p>
+                <p className="text-sm text-slate-400">Go online to start receiving ride requests from Kano.</p>
+            </div>
           </div>
         )}
+        
         {isOnline && !activeRide && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-emerald-500 text-white px-4 py-2 rounded-full text-xs font-bold animate-pulse">
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-emerald-500 text-white px-4 py-2 rounded-full text-xs font-bold animate-pulse z-10">
             LIVE IN KANO
           </div>
         )}
         
         {activeRide && (
-          <div className="text-center p-8 bg-white/80 backdrop-blur-md m-6 rounded-[32px] luxury-shadow border-2 border-emerald-500/20">
-            <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4 text-3xl">🛺</div>
-            <p className="font-black text-slate-800 text-xl">Ride in Progress</p>
-            <div className="mt-4 space-y-2">
-              <div className="flex justify-between text-xs font-bold text-slate-500 uppercase tracking-widest">
-                <span>Rider</span>
-                <span className="text-slate-800">{activeRide.rider?.fullName || 'Ziko Rider'}</span>
-              </div>
-              <div className="flex justify-between text-xs font-bold text-slate-500 uppercase tracking-widest">
-                <span>Fare</span>
-                <span className="text-emerald-600">₦{activeRide.price}</span>
-              </div>
+          <div className="absolute bottom-6 left-6 right-6 p-6 bg-white/90 backdrop-blur-md rounded-[32px] luxury-shadow border-2 border-emerald-500/20 z-10 animate-in slide-in-from-bottom-5 duration-500">
+            <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 bg-emerald-100 rounded-2xl flex items-center justify-center text-2xl">🛺</div>
+                    <div>
+                        <p className="font-black text-slate-800 text-lg leading-none">In Progress</p>
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">To: {activeRide.destinationAddress}</p>
+                    </div>
+                </div>
+                <div className="text-right">
+                    <p className="text-lg font-black text-emerald-600 leading-none">₦{activeRide.price}</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">{activeRide.rider?.fullName || 'Ziko Rider'}</p>
+                </div>
             </div>
 
-            {activeRide.riderCompleted && (
-              <div className="mt-8 animate-in slide-in-from-bottom-4 duration-500">
-                <p className="text-[10px] font-black text-emerald-600 uppercase tracking-widest mb-3">Rider confirms completion</p>
+            <div className="flex gap-3">
+                {activeRide.riderCompleted && (
+                  <button
+                    onClick={handleAcceptPayment}
+                    className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-700 transition-all"
+                  >
+                    CONFIRM PAYMENT
+                  </button>
+                )}
+                {!activeRide.riderCompleted && (
+                  <div className="flex-1 py-4 bg-slate-100 text-slate-400 rounded-2xl font-bold text-center text-xs flex items-center justify-center uppercase tracking-widest">
+                    Waiting for rider...
+                  </div>
+                )}
                 <button
-                  onClick={handleAcceptPayment}
-                  className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-lg shadow-emerald-500/20 hover:bg-emerald-700 transition-all active:scale-95"
+                    onClick={handleCancelRide}
+                    className="w-14 h-14 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center font-bold border border-red-100"
                 >
-                  CONFIRM PAYMENT
+                    ✕
                 </button>
-              </div>
-            )}
-            {!activeRide.riderCompleted && (
-              <p className="text-[10px] text-slate-400 font-bold mt-6 uppercase tracking-widest">Waiting for rider to complete...</p>
-            )}
+            </div>
           </div>
         )}
       </div>

@@ -1,10 +1,12 @@
 
-import React, { useState, useEffect } from 'react';
+
+import React, { useState, useEffect, useMemo } from 'react';
 import { User, Location, RideType, UserRole, RideStatus, RideHistoryItem } from '../types';
 import { KANO_LANDMARKS } from '../constants';
 import RideHistory from './RideHistory';
 import { rideApi, profileApi } from '../services/api';
 import { io, Socket } from 'socket.io-client';
+import GoogleMap from './GoogleMap';
 
 interface RiderAppProps {
   user: User;
@@ -16,7 +18,9 @@ interface RiderAppProps {
 const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwitchToDriver }) => {
   const [status, setStatus] = useState<RideStatus>(RideStatus.IDLE);
   const [pickup, setPickup] = useState<string>('Current Location');
+  const [pickupCoords, setPickupCoords] = useState<Location>({ lat: 11.9964, lng: 8.5167 });
   const [destination, setDestination] = useState<string>('');
+  const [destCoords, setDestCoords] = useState<Location | null>(null);
   const [rideType, setRideType] = useState<RideType>(RideType.SHARED);
   const [showSearch, setShowSearch] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -28,6 +32,27 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
   const [socket, setSocket] = useState<Socket | null>(null);
   const [activeRideData, setActiveRideData] = useState<any>(null);
   const [activeRideId, setActiveRideId] = useState<string | null>(null);
+  const [driverLocation, setDriverLocation] = useState<Location | null>(null);
+  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
+  const [driverPath, setDriverPath] = useState<Location[]>([]);
+  const [isMinimized, setIsMinimized] = useState(false);
+
+  // Default Pickup to Current Location
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const newLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          setPickupCoords(newLoc);
+          setPickup('Current Location');
+        },
+        (err) => {
+          console.error("Error getting initial position:", err);
+          // Fallback to Kano center already set in state
+        }
+      );
+    }
+  }, []);
 
   // Fetch history from backend
   useEffect(() => {
@@ -68,12 +93,17 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
           setDestination(activeRide.destinationAddress || 'Kano');
           setRideType(activeRide.type.toUpperCase() as RideType);
           setBargainPrice(activeRide.price);
+          if (activeRide.pickup) setPickupCoords(activeRide.pickup);
+          if (activeRide.destination) setDestCoords(activeRide.destination);
         } else if (pendingRequest) {
           setStatus(RideStatus.SEARCHING);
+          setActiveRideId(pendingRequest._id); // Store pending request ID for cancellation
           setPickup(pendingRequest.pickupAddress || 'Kano');
           setDestination(pendingRequest.destinationAddress || 'Kano');
           setRideType(pendingRequest.type.toUpperCase() as RideType);
           setBargainPrice(pendingRequest.price);
+          if (pendingRequest.pickup) setPickupCoords(pendingRequest.pickup);
+          if (pendingRequest.destination) setDestCoords(pendingRequest.destination);
         }
       } catch (err) {
         console.error("Failed to fetch active ride:", err);
@@ -82,9 +112,34 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
     fetchActive();
   }, [user.id]);
 
+  // Request Timeout Logic (Stops searching if no pilots accept within 45s)
+  useEffect(() => {
+    let timeoutId: ReturnType<typeof setTimeout>;
+    if (status === RideStatus.SEARCHING && activeRideId) {
+      timeoutId = setTimeout(async () => {
+        try {
+          await rideApi.cancelRequest(activeRideId);
+          setStatus(RideStatus.IDLE);
+          setActiveRideId(null);
+          setActiveRideData(null);
+          alert("No pilots available to accept your request at the moment. Please try again later.");
+        } catch (err) {
+          console.error("Timeout cancellation failed:", err);
+          // Still reset UI if backend fails to cancel due to timeout or network issue
+          setStatus(RideStatus.IDLE);
+          setActiveRideId(null);
+          alert("Search timed out. Please try again.");
+        }
+      }, 45000); // 45 seconds timeout
+    }
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [status, activeRideId]);
+
   // Socket Connection
   useEffect(() => {
-    const newSocket = io('https://ziko-backend.onrender.com');
+    const newSocket = io('http://localhost:5000');
     setSocket(newSocket);
 
     newSocket.on('connect', () => {
@@ -97,14 +152,36 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
       setActiveRideData(ride);
       setActiveRideId(ride._id);
       setStatus(RideStatus.ACCEPTED);
+      if (ride.pickup) setPickupCoords(ride.pickup);
+      if (ride.destination) setDestCoords(ride.destination);
+    });
+
+    newSocket.on('driver-location-update', (data) => {
+      console.log('Driver location update:', data);
+      setDriverLocation(data.location);
+      setDriverPath(prev => [...prev, data.location]);
+    });
+
+    newSocket.on('ride-cancelled', (data) => {
+      console.log('Ride cancelled by other party:', data);
+      alert("The ride has been cancelled by the pilot.");
+      setStatus(RideStatus.IDLE);
+      setActiveRideData(null);
+      setActiveRideId(null);
+      setDriverLocation(null);
+      setDriverPath([]);
+      setDirections(null);
     });
 
     newSocket.on('ride-finalized', (finalRide) => {
-      console.log('Ride finalized:', finalRide);
+      console.log('ride finalized:', finalRide);
       setStatus(RideStatus.IDLE);
       setDestination('');
       setActiveRideData(null);
       setActiveRideId(null);
+      setDriverLocation(null);
+      setDriverPath([]);
+      setDirections(null);
       alert(`Trip completed! Price: ₦${finalRide.price}`);
     });
 
@@ -119,6 +196,50 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
       newSocket.disconnect();
     };
   }, [user.id]);
+
+  // Watch Rider location and emit to socket
+  useEffect(() => {
+    if (status === RideStatus.IDLE) return;
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        const newLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setPickupCoords(newLoc);
+        if (socket && activeRideId) {
+          socket.emit('update-location', {
+            riderId: user.id,
+            location: newLoc,
+            pilotId: activeRideData?.pilot?._id || activeRideData?.pilot
+          });
+        }
+      },
+      (err) => console.error("Error watching rider location:", err),
+      { enableHighAccuracy: true }
+    );
+
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [status, socket, activeRideId, activeRideData, user.id]);
+
+  // Get Directions when destination is selected
+  useEffect(() => {
+    if (pickupCoords && destCoords && window.google) {
+      const directionsService = new google.maps.DirectionsService();
+      directionsService.route(
+        {
+          origin: pickupCoords,
+          destination: destCoords,
+          travelMode: google.maps.TravelMode.DRIVING,
+        },
+        (result, status) => {
+          if (status === google.maps.DirectionsStatus.OK) {
+            setDirections(result);
+          } else {
+            console.error(`error fetching directions ${result}`);
+          }
+        }
+      );
+    }
+  }, [pickupCoords, destCoords]);
 
   const handleProfileImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files?.[0]) {
@@ -146,24 +267,24 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
   };
 
   // Simulate Map Interactions
-  const handleDestinationSelect = (place: string) => {
-    setDestination(place);
+  const handleDestinationSelect = (name: string, coords: Location) => {
+    setDestination(name);
+    setDestCoords(coords);
     setShowSearch(false);
     setBasePrice(Math.floor(Math.random() * 500) + 200);
     setBargainPrice(Math.floor(Math.random() * 500) + 200);
   };
 
   const handleRequestRide = async () => {
+    if (!destCoords) return;
     setStatus(RideStatus.SEARCHING);
     setError(null);
     try {
-      // Mock coordinates for demonstration
-      const mockPickup = { lat: 11.9964, lng: 8.5167 };
-      const mockDestination = { lat: 12.0022, lng: 8.5919 };
       const price = rideType === RideType.SHARED ? basePrice : bargainPrice;
       
-      const response = await rideApi.requestRide(mockPickup, mockDestination, pickup, destination, price, rideType);
+      const response = await rideApi.requestRide(pickupCoords, destCoords, pickup, destination, price, rideType);
       console.log("Ride requested:", response.data);
+      setActiveRideId(response.data._id);
       // Wait for socket notification 'ride-accepted'
     } catch (err: any) {
       console.error("Ride Request Error:", err);
@@ -173,6 +294,29 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
       } else {
         alert(err.response?.data?.error || "Failed to request ride. Please try again.");
       }
+    }
+  };
+
+  const handleCancelRide = async () => {
+    if (!activeRideId) return;
+    try {
+        if (status === RideStatus.SEARCHING) {
+            await rideApi.cancelRequest(activeRideId);
+        } else {
+            await rideApi.cancelRide(activeRideId);
+        }
+        setStatus(RideStatus.IDLE);
+        setActiveRideData(null);
+        setActiveRideId(null);
+        setDriverLocation(null);
+        setDirections(null);
+        alert("Ride cancelled successfully.");
+    } catch (err: any) {
+        console.error("Failed to cancel ride:", err);
+        if (err.response) {
+            console.error("Cancellation Error Response:", err.response.data);
+        }
+        alert(`Failed to cancel ride: ${err.response?.data?.error || err.message}`);
     }
   };
 
@@ -187,49 +331,52 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
         setDestination('');
         setActiveRideData(null);
         setActiveRideId(null);
+        setDriverLocation(null);
+        setDirections(null);
     } catch (err) {
         console.error("Failed to complete ride:", err);
         alert("Failed to complete ride.");
     }
   };
 
+  const mapMarkers = useMemo(() => {
+    const markers = [];
+    if (pickupCoords) {
+      markers.push({ 
+        id: 'pickup', 
+        position: pickupCoords, 
+        title: 'Pickup', 
+        icon: 'https://maps.google.com/mapfiles/ms/icons/blue-dot.png' 
+      });
+    }
+    if (destCoords) {
+      markers.push({ 
+        id: 'destination', 
+        position: destCoords, 
+        title: 'Destination', 
+        icon: 'https://maps.google.com/mapfiles/ms/icons/red-dot.png' 
+      });
+    }
+    if (driverLocation) {
+        markers.push({
+            id: 'driver',
+            position: driverLocation,
+            title: 'Driver'
+        });
+    }
+    return markers;
+  }, [pickupCoords, destCoords, driverLocation]);
+
   return (
     <div className="h-full w-full relative">
-      {/* Mock Map Background */}
-      <div className="absolute inset-0 bg-[#e2e8f0]">
-        <div className="w-full h-full relative overflow-hidden">
-          {/* Simulated Street Grid */}
-          <div className="absolute inset-0 grid grid-cols-12 grid-rows-12 opacity-30 pointer-events-none">
-            {Array.from({ length: 144 }).map((_, i) => (
-              <div key={i} className="border-[0.5px] border-slate-400"></div>
-            ))}
-          </div>
-
-          {/* Landmark Pins */}
-          {KANO_LANDMARKS.map((landmark, i) => (
-            <div
-              key={i}
-              className="absolute group"
-              style={{
-                left: `${20 + (i * 12) % 60}%`,
-                top: `${30 + (i * 8) % 50}%`
-              }}
-            >
-              <div className="w-4 h-4 bg-emerald-600 rounded-full border-2 border-white animate-bounce-slow"></div>
-              <div className="hidden group-hover:block absolute top-6 left-1/2 -translate-x-1/2 bg-white px-2 py-1 rounded-md text-[10px] font-bold shadow-sm whitespace-nowrap">
-                {landmark.name}
-              </div>
-            </div>
-          ))}
-
-          {/* User Marker */}
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
-            <div className="relative">
-              <div className="w-12 h-12 bg-blue-500/20 rounded-full flex items-center justify-center animate-ping absolute -inset-0"></div>
-              <div className="w-6 h-6 bg-blue-600 rounded-full border-4 border-white shadow-lg relative z-10"></div>
-            </div>
-          </div>
-        </div>
+      {/* Google Map Section */}
+      <div className="absolute inset-0">
+        <GoogleMap 
+          center={pickupCoords} 
+          markers={mapMarkers}
+          directions={directions}
+          paths={driverPath.length > 0 ? [{ id: 'driver-path', points: driverPath, color: '#10b981' }] : []}
+        />
       </div>
 
       {/* Header */}
@@ -284,8 +431,18 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
       </div>
 
       {/* Main Bottom Sheet */}
-      <div className={`absolute bottom-0 left-0 right-0 transition-transform duration-500 ease-out z-30 ${showSearch ? 'translate-y-0' : 'translate-y-0'}`}>
-        <div className="mx-auto max-w-lg bg-white rounded-t-[40px] luxury-shadow p-6 pb-10">
+      <div className={`absolute bottom-0 left-0 right-0 transition-all duration-500 ease-out z-30 ${(isMinimized && (status === RideStatus.SEARCHING || status === RideStatus.ACCEPTED)) ? 'translate-y-[90%]' : 'translate-y-0'}`}>
+        <div className="mx-auto max-w-lg bg-white rounded-t-[40px] luxury-shadow p-6 pb-10 relative">
+          {/* Minimize/Maximize Handle for Active Ride */}
+          {isMinimized && (status === RideStatus.SEARCHING || status === RideStatus.ACCEPTED) && (
+            <button 
+                onClick={() => setIsMinimized(false)}
+                className="absolute -top-12 left-1/2 -translate-x-1/2 bg-[#065f46] text-white px-6 py-2 rounded-t-2xl font-bold flex items-center gap-2 animate-bounce pointer-events-auto"
+            >
+                <span>↑</span> VIEW ACTIVE RIDE
+            </button>
+          )}
+          
           <div className="w-12 h-1 bg-slate-200 rounded-full mx-auto mb-6"></div>
 
           {status === RideStatus.IDLE && (
@@ -296,7 +453,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
                   <input
                     type="text"
                     value={pickup}
-                    readOnly
+                    onChange={(e) => setPickup(e.target.value)}
                     className="bg-transparent border-none w-full font-medium text-slate-800 focus:ring-0"
                   />
                 </div>
@@ -337,6 +494,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
                 </div>
               )}
 
+              {/* Bargain Section Commented Out
               {destination && rideType === RideType.PRIVATE && (
                 <div className="bg-amber-50 p-4 rounded-2xl flex items-center justify-between">
                   <span className="text-xs font-bold text-amber-800">BARGAIN PRICE</span>
@@ -347,6 +505,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
                   </div>
                 </div>
               )}
+              */}
 
               <button
                 disabled={!destination}
@@ -367,7 +526,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
               </div>
               <h3 className="text-2xl font-bold text-slate-800">Searching for Pilots</h3>
               <p className="text-slate-500">Finding the best Keke near {pickup}...</p>
-              <button onClick={() => setStatus(RideStatus.IDLE)} className="text-red-500 font-bold mt-4">Cancel Request</button>
+              <button onClick={handleCancelRide} className="text-red-500 font-bold mt-4">Cancel Request</button>
             </div>
           )}
 
@@ -415,7 +574,13 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
                     Mark as Completed
                 </button>
                 <button
-                    onClick={() => setStatus(RideStatus.IDLE)}
+                    onClick={handleCancelRide}
+                    className="w-full py-4 bg-red-50 text-red-600 rounded-2xl font-bold border border-red-100"
+                >
+                    Cancel Ride
+                </button>
+                <button
+                    onClick={() => setIsMinimized(true)}
                     className="w-full py-3 text-slate-400 font-medium text-xs"
                 >
                     Minimize (Stay in Dash)
@@ -448,7 +613,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
             {KANO_LANDMARKS.map((landmark, i) => (
               <button
                 key={i}
-                onClick={() => handleDestinationSelect(landmark.name)}
+                onClick={() => handleDestinationSelect(landmark.name, { lat: landmark.lat, lng: landmark.lng })}
                 className="w-full p-4 flex items-center gap-4 hover:bg-slate-50 rounded-2xl transition-colors"
               >
                 <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center text-emerald-600">📍</div>
