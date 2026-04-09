@@ -417,7 +417,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 <h2 className="text-2xl font-bold text-slate-800 mb-2">
                   {role === UserRole.DRIVER ? 'Pilot Profile' : 'Rider Profile'}
                 </h2>
-                <p className="text-slate-500 text-sm">Let others recognize you on the road.</p>
+                <p className="text-slate-500 text-sm">Verify your identity</p>
               </div>
 
               <div className="flex justify-center mb-6">
