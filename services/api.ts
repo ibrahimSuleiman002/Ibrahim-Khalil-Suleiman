@@ -32,8 +32,8 @@ export const profileApi = {
 
 export const rideApi = {
   getHistory: () => api.get('/rides/history'),
-  requestRide: (pickup: any, destination: any, pickupAddress: string, destinationAddress: string, price: number, type: string) =>
-    api.post('/rides/request', { pickup, destination, pickupAddress, destinationAddress, price, type }),
+  requestRide: (pickup: any, destination: any, pickupAddress: string, destinationAddress: string, price: number, type: string, distance?: number) =>
+    api.post('/rides/request', { pickup, destination, pickupAddress, destinationAddress, price, type, distance }),
   acceptRide: (rideId: string) => api.post(`/rides/accept/${rideId}`),
   getActiveRide: () => api.get('/rides/active'),
   getActiveRequests: () => api.get('/rides/requests'),
@@ -41,6 +41,10 @@ export const rideApi = {
   completeRidePilot: (rideId: string) => api.post(`/rides/complete-pilot/${rideId}`),
   cancelRide: (rideId: string) => api.post(`/rides/cancel-ride/${rideId}`),
   cancelRequest: (requestId: string) => api.post(`/rides/cancel-request/${requestId}`),
+};
+
+export const paymentApi = {
+  clearCommission: (reference: string) => api.post('/payment/clear-commission', { reference }),
 };
 
 export default api;

@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { User, RideStatus, RideHistoryItem, Location } from '../types';
 import RideHistory from './RideHistory';
-import { rideApi, profileApi } from '../services/api';
+import { rideApi, profileApi, paymentApi } from '../services/api';
 import { io, Socket } from 'socket.io-client';
 import GoogleMap from './GoogleMap';
 
@@ -28,6 +28,9 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
   const [riderLocation, setRiderLocation] = useState<Location | null>(null);
   const [riderPath, setRiderPath] = useState<Location[]>([]);
   const [processingAction, setProcessingAction] = useState<string | null>(null);
+
+  const commissionBalance = user.commissionBalance || 0;
+  const canGoOnline = user.isVerified && commissionBalance < 2000;
 
   // Fetch history from backend
   useEffect(() => {
@@ -307,6 +310,26 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
     }
   };
 
+  const handleClearCommission = async () => {
+    setProcessingAction('pay');
+    try {
+      // Mock payment process, sending a mock Paystack reference
+      const response = await paymentApi.clearCommission('mock_ref_' + Date.now());
+      const updatedBackendUser = response.data.user;
+      
+      onUpdateUser({
+        ...user,
+        commissionBalance: updatedBackendUser.commissionBalance
+      });
+      alert("Commission balance cleared successfully!");
+    } catch (err) {
+      console.error("Failed to clear commission:", err);
+      alert("Failed to clear commission. Please try again.");
+    } finally {
+      setProcessingAction(null);
+    }
+  };
+
   const mapMarkers = useMemo(() => {
     const markers = [];
     if (currentLocation) {
@@ -465,8 +488,26 @@ const DriverApp: React.FC<DriverAppProps> = ({ user, onLogout, onUpdateUser, onS
             </p>
           </div>
         )}
+        {user.isVerified && commissionBalance >= 2000 && (
+          <div className="mb-4 p-4 bg-red-50 rounded-2xl border border-red-100 flex flex-col gap-2">
+            <div className="flex items-center gap-3">
+              <span className="text-xl">⚠️</span>
+              <p className="text-[11px] font-bold text-red-700 leading-tight">
+                COMMISSION OVERDUE<br/>
+                <span className="opacity-70 font-medium">Clear your balance (₦{commissionBalance}) to go online.</span>
+              </p>
+            </div>
+            <button
+               onClick={handleClearCommission}
+               disabled={!!processingAction}
+               className="mt-2 text-xs bg-red-600 text-white font-bold py-3 px-4 rounded-xl flex justify-center items-center gap-2 shadow-md w-full"
+            >
+               {processingAction === 'pay' ? 'CLEARING...' : 'CLEAR BALANCE via Paystack'}
+            </button>
+          </div>
+        )}
         <button
-          disabled={!!activeRide || !user.isVerified}
+          disabled={!!activeRide || !canGoOnline}
           onClick={toggleOnline}
           className={`w-full py-5 rounded-[24px] font-black text-lg transition-all duration-500 disabled:opacity-50 ${isOnline ? 'bg-red-50 text-red-600' : 'bg-[#065f46] text-white shadow-xl shadow-emerald-900/20'}`}
         >

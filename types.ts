@@ -40,6 +40,7 @@ export interface User {
   vehicleDocument?: string;
   isDriverVerified?: boolean;
   balance?: number;
+  commissionBalance?: number;
   trips?: number;
 }
 

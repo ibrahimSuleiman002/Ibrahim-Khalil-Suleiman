@@ -26,6 +26,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
   const [showHistory, setShowHistory] = useState(false);
   const [basePrice, setBasePrice] = useState(300);
   const [bargainPrice, setBargainPrice] = useState(300);
+  const [distanceMeters, setDistanceMeters] = useState<number | undefined>(undefined);
   const [rideHistory, setRideHistory] = useState<RideHistoryItem[]>([]);
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -247,6 +248,13 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
         (result, status) => {
           if (status === google.maps.DirectionsStatus.OK) {
             setDirections(result);
+            if (result?.routes[0]?.legs[0]?.distance?.value) {
+                const distMeters = result.routes[0].legs[0].distance.value;
+                setDistanceMeters(distMeters);
+                const calcPrice = Math.floor((distMeters / 1000) * 135);
+                setBasePrice(calcPrice);
+                setBargainPrice(calcPrice);
+            }
           } else {
             console.error(`error fetching directions ${result}`);
           }
@@ -280,13 +288,10 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
     }
   };
 
-  // Simulate Map Interactions
   const handleDestinationSelect = (name: string, coords: Location) => {
     setDestination(name);
     setDestCoords(coords);
     setShowSearch(false);
-    setBasePrice(Math.floor(Math.random() * 500) + 200);
-    setBargainPrice(Math.floor(Math.random() * 500) + 200);
   };
 
   const handleRequestRide = async () => {
@@ -303,7 +308,7 @@ const RiderApp: React.FC<RiderAppProps> = ({ user, onLogout, onUpdateUser, onSwi
     try {
       const price = rideType === RideType.SHARED ? basePrice : bargainPrice;
       
-      const response = await rideApi.requestRide(pickupCoords, destCoords, pickup, destination, price, rideType);
+      const response = await rideApi.requestRide(pickupCoords, destCoords, pickup, destination, price, rideType, distanceMeters);
       console.log("Ride requested:", response.data);
       setActiveRideId(response.data._id);
       // Wait for socket notification 'ride-accepted'
