@@ -195,10 +195,10 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     
     // Stricter Pilot validation
     if (role === UserRole.DRIVER) {
-      if (!nin || ninStatus !== 'valid') {
-        setError("Please provide a valid 11-digit NIN.");
-        return;
-      }
+      // if (!nin || ninStatus !== 'valid') {
+      //   setError("Please provide a valid 11-digit NIN.");
+      //   return;
+      // }
       if (!plateNumber) {
         setError("Please provide your plate number.");
         return;
@@ -231,7 +231,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
           formData.append('vehicleDocument', vehicleDocumentFile);
         }
       }
-      formData.append('nin', nin);
+      // formData.append('nin', nin); // Commented out for now
 
       const backendRole = role === UserRole.RIDER ? 'rider' : 'pilot';
       const response = await profileApi.updateProfile(backendRole, formData);
@@ -455,6 +455,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                   />
                 </div>
 
+                {/* NIN Verification Deferred to Next Version
                 <div>
                   <label className="text-xs font-bold text-slate-400 uppercase tracking-wider ml-1">NIN (National Identity Number)</label>
                   <div className="relative">
@@ -486,6 +487,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                     <p className="text-[10px] text-emerald-600 font-bold mt-1 ml-1">IDENTITY VERIFIED BY NIMC</p>
                   )}
                 </div>
+                */}
 
                 {role === UserRole.DRIVER && (
                   <>
@@ -565,7 +567,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                         />
                       </div>
                     </div>
-                    {role === UserRole.DRIVER && name && (avatarFile || avatar) && plateNumber && ninStatus === 'valid' && plateNumberImageFile && vehicleDocumentFile && (
+                    {role === UserRole.DRIVER && name && (avatarFile || avatar) && plateNumber && plateNumberImageFile && vehicleDocumentFile && (
                       <div className="p-4 bg-emerald-50 rounded-2xl flex items-center gap-3 animate-in fade-in zoom-in duration-300">
                         <div className="w-6 h-6 bg-emerald-500 text-white rounded-full flex items-center justify-center text-[10px]">✓</div>
                         <p className="text-xs font-bold text-emerald-800">IDENTITY VERIFICATION READY</p>
